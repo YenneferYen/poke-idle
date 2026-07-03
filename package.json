@@ -1,0 +1,54 @@
+{
+  "name": "poke-idle",
+  "version": "1.0.0",
+  "description": "Janela dedicada para o Poke Idle World que continua rodando em segundo plano (sem congelar a aba).",
+  "main": "main.js",
+  "author": "Poke Idle",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win --publish never",
+    "publish": "electron-builder --win --publish always"
+  },
+  "build": {
+    "appId": "com.poke.idle",
+    "productName": "Poke Idle",
+    "directories": {
+      "output": "C:/Users/amovc/poke-idle-dist",
+      "buildResources": "assets"
+    },
+    "files": [
+      "main.js",
+      "package.json",
+      "assets/**/*"
+    ],
+    "afterPack": "./afterPack.js",
+    "win": {
+      "target": "nsis",
+      "icon": "assets/pokeball.ico",
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Poke Idle"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "YenneferYen",
+      "repo": "poke-idle",
+      "releaseType": "release"
+    }
+  },
+  "dependencies": {
+    "electron-updater": "^6.3.9"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8",
+    "rcedit": "^5.0.2"
+  }
+}

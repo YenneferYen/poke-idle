@@ -1,0 +1,5 @@
+node_modules/
+dist/
+*.log
+*.lnk
+gh_token.txt
