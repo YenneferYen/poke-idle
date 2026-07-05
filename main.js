@@ -7,6 +7,7 @@ const {
   shell,
   globalShortcut,
   screen,
+  dialog,
 } = require('electron');
 const path = require('path');
 const fs = require('fs');
@@ -140,6 +141,59 @@ async function backupSave() {
 }
 
 // ---------------------------------------------------------------------------
+// Limpeza de cache. Útil quando o jogo trava/fica em branco ao carregar por
+// causa de arquivos antigos em cache ou um service worker quebrado.
+//
+// IMPORTANTE: o progresso do jogo fica no localStorage. Por isso a limpeza
+// NUNCA apaga o localStorage e, por garantia, faz um backup do save ANTES de
+// mexer em qualquer coisa. Duas modalidades:
+//   - 'cache'  : só cache HTTP + service workers + cache storage. Mantém save
+//                E login. É o que resolve 99% dos travamentos de carregamento.
+//   - 'full'   : o acima + cookies (desloga). Mantém o save; você só precisa
+//                logar de novo. Útil quando o login está "bugado".
+// ---------------------------------------------------------------------------
+async function clearCache(mode = 'cache') {
+  if (!mainWin || mainWin.isDestroyed()) return;
+
+  const full = mode === 'full';
+  const detail = full
+    ? 'Vai limpar o cache, os service workers E os cookies (você vai precisar ' +
+      'logar de novo).\n\nO save do jogo é preservado e um backup é feito antes. ' +
+      'A janela recarrega em seguida.'
+    : 'Vai limpar o cache e os service workers do jogo.\n\nO save e o login são ' +
+      'preservados e um backup é feito antes. A janela recarrega em seguida.';
+
+  const { response } = await dialog.showMessageBox(mainWin, {
+    type: 'question',
+    buttons: ['Limpar e recarregar', 'Cancelar'],
+    defaultId: 0,
+    cancelId: 1,
+    title: 'Limpar cache',
+    message: full ? 'Limpar cache e sair do login?' : 'Limpar cache do jogo?',
+    detail,
+    icon: ICON_PATH,
+  });
+  if (response !== 0) return;
+
+  // Backup de segurança antes de tocar em qualquer armazenamento.
+  await backupSave();
+
+  const ses = mainWin.webContents.session;
+  // Tudo, menos localstorage (o save) — e cookies só no modo 'full'.
+  const storages = ['cachestorage', 'serviceworkers', 'shadercache'];
+  if (full) storages.push('cookies');
+
+  try {
+    await ses.clearCache();
+    await ses.clearStorageData({ storages });
+  } catch {
+    /* segue para recarregar mesmo assim */
+  }
+
+  if (mainWin && !mainWin.isDestroyed()) mainWin.reload();
+}
+
+// ---------------------------------------------------------------------------
 // Mostrar / esconder (usado pela bandeja e pelo atalho global).
 // ---------------------------------------------------------------------------
 function showWindow() {
@@ -252,6 +306,7 @@ function createTray() {
   const trayMenu = Menu.buildFromTemplate([
     { label: 'Mostrar / Esconder', click: toggleWindow },
     { label: 'Recarregar jogo', click: () => mainWin && mainWin.reload() },
+    { label: 'Limpar cache e recarregar', click: () => clearCache('cache') },
     {
       label: 'Ferramentas de desenvolvedor',
       click: () => {
@@ -347,6 +402,15 @@ app.whenReady().then(() => {
             fs.mkdirSync(BACKUP_DIR, { recursive: true });
             shell.openPath(BACKUP_DIR);
           },
+        },
+        { type: 'separator' },
+        {
+          label: 'Limpar cache e recarregar',
+          click: () => clearCache('cache'),
+        },
+        {
+          label: 'Limpar cache e sair do login (mantém o save)',
+          click: () => clearCache('full'),
         },
       ],
     },
