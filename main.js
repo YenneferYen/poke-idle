@@ -17,7 +17,8 @@ const GAME_URL = 'https://poke.idleworld.online/';
 const ICON_PATH = path.join(__dirname, 'assets', 'pokeball.ico');
 const TOGGLE_HOTKEY = 'CommandOrControl+Alt+P';
 
-// Backup automático do save (localStorage) do jogo.
+// Backup automático do localStorage do jogo (preferências + caças poke:hunts:*).
+// O progresso em si é server-authoritative; isto protege hunts/preferências.
 const BACKUP_DIR = path.join(app.getPath('userData'), 'backups');
 const BACKUP_INTERVAL_MS = 10 * 60 * 1000; // a cada 10 minutos
 const MAX_BACKUPS = 30; // mantém os 30 mais recentes (~5h de histórico)
@@ -53,6 +54,7 @@ let powerBlockerId = null;
 let isQuitting = false; // vira true só quando o usuário escolhe "Sair" de verdade
 let saveTimer = null;
 let backupTimer = null;
+let reloadTimer = null; // reconexão agendada (evita empilhar recarregamentos)
 
 // ---------------------------------------------------------------------------
 // Memória da janela: lembra tamanho/posição entre sessões.
@@ -100,10 +102,21 @@ function scheduleSave() {
   saveTimer = setTimeout(saveWindowState, 500);
 }
 
+// Reagenda um recarregamento do jogo, cancelando qualquer um pendente. Assim,
+// se vários eventos de falha dispararem juntos, só um reload acontece.
+function scheduleReload(delay) {
+  clearTimeout(reloadTimer);
+  reloadTimer = setTimeout(() => {
+    if (mainWin && !mainWin.isDestroyed()) mainWin.loadURL(GAME_URL);
+  }, delay);
+}
+
 // ---------------------------------------------------------------------------
-// Backup automático do save (o progresso do jogo fica no localStorage).
-// Copia periodicamente para arquivos datados em userData/backups, mantendo só
-// os mais recentes. Protege contra limpar cache, trocar de PC ou perder a conta.
+// Backup automático do localStorage (preferências + caças poke:hunts:*). O
+// progresso vivo é server-authoritative, então isto NÃO é o "save" do jogo —
+// serve para não perder a configuração de hunts/preferências ao limpar cache
+// ou trocar de PC. Copia para arquivos datados em userData/backups, mantendo
+// só os mais recentes.
 // ---------------------------------------------------------------------------
 async function backupSave() {
   if (!mainWin || mainWin.isDestroyed()) return;
@@ -144,13 +157,15 @@ async function backupSave() {
 // Limpeza de cache. Útil quando o jogo trava/fica em branco ao carregar por
 // causa de arquivos antigos em cache ou um service worker quebrado.
 //
-// IMPORTANTE: o progresso do jogo fica no localStorage. Por isso a limpeza
-// NUNCA apaga o localStorage e, por garantia, faz um backup do save ANTES de
-// mexer em qualquer coisa. Duas modalidades:
-//   - 'cache'  : só cache HTTP + service workers + cache storage. Mantém save
+// IMPORTANTE: o progresso do jogo é server-authoritative (fica na conta, no
+// servidor). O localStorage guarda só preferências de tela, a configuração de
+// caças (poke:hunts:*) e os tokens de login. Por isso a limpeza NUNCA apaga o
+// localStorage (para manter hunts + login) e, por garantia, faz um backup do
+// localStorage ANTES de mexer em qualquer coisa. Duas modalidades:
+//   - 'cache'  : só cache HTTP + service workers + cache storage. Mantém hunts
 //                E login. É o que resolve 99% dos travamentos de carregamento.
-//   - 'full'   : o acima + cookies (desloga). Mantém o save; você só precisa
-//                logar de novo. Útil quando o login está "bugado".
+//   - 'full'   : o acima + cookies (desloga). Mantém hunts/preferências; você
+//                só precisa logar de novo. Útil quando o login está "bugado".
 // ---------------------------------------------------------------------------
 async function clearCache(mode = 'cache') {
   if (!mainWin || mainWin.isDestroyed()) return;
@@ -158,10 +173,10 @@ async function clearCache(mode = 'cache') {
   const full = mode === 'full';
   const detail = full
     ? 'Vai limpar o cache, os service workers E os cookies (você vai precisar ' +
-      'logar de novo).\n\nO save do jogo é preservado e um backup é feito antes. ' +
-      'A janela recarrega em seguida.'
-    : 'Vai limpar o cache e os service workers do jogo.\n\nO save e o login são ' +
-      'preservados e um backup é feito antes. A janela recarrega em seguida.';
+      'logar de novo).\n\nSuas caças (hunts) e preferências são preservadas e um ' +
+      'backup é feito antes. A janela recarrega em seguida.'
+    : 'Vai limpar o cache e os service workers do jogo.\n\nSuas caças (hunts) e o ' +
+      'login são preservados e um backup é feito antes. A janela recarrega em seguida.';
 
   const { response } = await dialog.showMessageBox(mainWin, {
     type: 'question',
@@ -179,7 +194,7 @@ async function clearCache(mode = 'cache') {
   await backupSave();
 
   const ses = mainWin.webContents.session;
-  // Tudo, menos localstorage (o save) — e cookies só no modo 'full'.
+  // Tudo, menos localstorage (hunts/preferências/login) — cookies só no 'full'.
   const storages = ['cachestorage', 'serviceworkers', 'shadercache'];
   if (full) storages.push('cookies');
 
@@ -264,19 +279,12 @@ function createWindow() {
 
   // Reconexão automática: se a página falhar ao carregar (queda de internet,
   // servidor fora do ar) ou o processo da página morrer, recarrega sozinho.
+  // Um único timer por vez: vários eventos de falha não empilham reloads.
   mainWin.webContents.on('did-fail-load', (_e, errorCode, _desc, _url, isMainFrame) => {
     // -3 = ERR_ABORTED (navegação cancelada normalmente); ignora.
-    if (isMainFrame && errorCode !== -3) {
-      setTimeout(() => {
-        if (mainWin && !mainWin.isDestroyed()) mainWin.loadURL(GAME_URL);
-      }, 5000);
-    }
+    if (isMainFrame && errorCode !== -3) scheduleReload(5000);
   });
-  mainWin.webContents.on('render-process-gone', () => {
-    setTimeout(() => {
-      if (mainWin && !mainWin.isDestroyed()) mainWin.reload();
-    }, 2000);
-  });
+  mainWin.webContents.on('render-process-gone', () => scheduleReload(2000));
 
   // Faz um backup logo após cada carregamento (dá um tempo pro jogo popular o
   // localStorage antes de copiar).
@@ -295,6 +303,7 @@ function createWindow() {
   });
 
   mainWin.on('closed', () => {
+    clearTimeout(reloadTimer);
     mainWin = null;
   });
 }
@@ -334,6 +343,86 @@ function startPowerBlocker() {
   if (powerBlockerId === null || !powerSaveBlocker.isStarted(powerBlockerId)) {
     powerBlockerId = powerSaveBlocker.start('prevent-app-suspension');
   }
+}
+
+// ---------------------------------------------------------------------------
+// Auto-atualização com feedback ao usuário.
+// O app instalado verifica ao abrir e a cada 6h. Quando o usuário pede na mão
+// (menu Ferramentas → Verificar atualizações), mostramos diálogos com o
+// resultado — antes isso era silencioso e dava a impressão de "não fez nada".
+// ---------------------------------------------------------------------------
+let manualUpdateCheck = false; // true quando o usuário pediu a verificação
+let updateHandlersReady = false;
+
+// Diálogo simples e independente da janela (funciona mesmo escondido na bandeja).
+function updateDialog(type, message, detail, buttons) {
+  return dialog.showMessageBox({
+    type,
+    title: 'Poke Idle — atualização',
+    message,
+    detail,
+    buttons: buttons || ['OK'],
+    noLink: true,
+    icon: ICON_PATH,
+  });
+}
+
+function setupAutoUpdater() {
+  if (updateHandlersReady) return;
+  updateHandlersReady = true;
+
+  autoUpdater.on('update-not-available', () => {
+    if (!manualUpdateCheck) return;
+    manualUpdateCheck = false;
+    updateDialog('info', 'Você já está na versão mais recente.',
+      `Versão instalada: ${app.getVersion()}.`);
+  });
+
+  autoUpdater.on('update-available', (info) => {
+    if (!manualUpdateCheck) return;
+    manualUpdateCheck = false;
+    updateDialog('info', 'Atualização encontrada!',
+      `Baixando a versão ${info.version} em segundo plano. ` +
+      'Você será avisado quando estiver pronta para instalar.');
+  });
+
+  autoUpdater.on('error', (err) => {
+    if (!manualUpdateCheck) return;
+    manualUpdateCheck = false;
+    updateDialog('error', 'Não foi possível verificar atualizações.',
+      String(err && err.message ? err.message : err));
+  });
+
+  // Vale tanto para verificação manual quanto automática: avisa e oferece
+  // reiniciar para aplicar (a instalação acontece ao encerrar o app).
+  autoUpdater.on('update-downloaded', async (info) => {
+    const { response } = await updateDialog('question',
+      `Atualização ${info.version} pronta para instalar.`,
+      'O app precisa reiniciar para aplicar. Deseja reiniciar agora?',
+      ['Reiniciar agora', 'Mais tarde']);
+    if (response === 0) {
+      isQuitting = true;
+      autoUpdater.quitAndInstall();
+    }
+  });
+}
+
+function runUpdateCheck(manual) {
+  if (!app.isPackaged) {
+    if (manual) {
+      updateDialog('info', 'Atualização indisponível no modo de desenvolvimento.',
+        'A verificação de atualizações só funciona no app instalado.');
+    }
+    return;
+  }
+  setupAutoUpdater();
+  manualUpdateCheck = manual;
+  autoUpdater.checkForUpdates().catch((err) => {
+    if (!manual) return;
+    manualUpdateCheck = false;
+    updateDialog('error', 'Não foi possível verificar atualizações.',
+      String(err && err.message ? err.message : err));
+  });
 }
 
 app.on('second-instance', () => {
@@ -384,9 +473,7 @@ app.whenReady().then(() => {
       submenu: [
         {
           label: 'Verificar atualizações',
-          click: () => {
-            if (app.isPackaged) autoUpdater.checkForUpdatesAndNotify().catch(() => {});
-          },
+          click: () => runUpdateCheck(true),
         },
         { type: 'separator' },
         {
@@ -428,11 +515,12 @@ app.whenReady().then(() => {
   backupTimer = setInterval(backupSave, BACKUP_INTERVAL_MS);
 
   // Auto-atualização (só quando instalado). Verifica ao abrir e a cada 6h;
-  // baixa em segundo plano e instala ao sair. Erros são silenciosos para não
-  // atrapalhar o jogo (ex.: sem internet).
+  // baixa em segundo plano e avisa quando estiver pronta para instalar. A
+  // verificação automática é silenciosa (não incomoda se não houver update ou
+  // se estiver offline); só a verificação manual mostra "já está atualizado".
   if (app.isPackaged) {
-    autoUpdater.checkForUpdatesAndNotify().catch(() => {});
-    setInterval(() => autoUpdater.checkForUpdates().catch(() => {}), 6 * 60 * 60 * 1000);
+    runUpdateCheck(false);
+    setInterval(() => runUpdateCheck(false), 6 * 60 * 60 * 1000);
   }
 
   app.on('activate', () => {
@@ -451,6 +539,7 @@ app.on('before-quit', () => {
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
   clearInterval(backupTimer);
+  clearTimeout(reloadTimer);
   if (powerBlockerId !== null && powerSaveBlocker.isStarted(powerBlockerId)) {
     powerSaveBlocker.stop(powerBlockerId);
   }

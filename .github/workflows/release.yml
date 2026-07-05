@@ -1,0 +1,40 @@
+name: Release
+
+# Publica uma nova Release (instalador + latest.yml) sempre que uma tag "v*"
+# for enviada. Assim ninguém precisa de token local nem da pasta de saída
+# amarrada a um usuário: o build roda no GitHub e usa o GITHUB_TOKEN embutido.
+#
+# Fluxo para lançar uma versão:
+#   1. npm version patch      (sobe a versão no package.json e cria o commit + tag)
+#   2. git push --follow-tags (envia o commit e a tag; a tag dispara este workflow)
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write # necessário para criar a Release
+
+jobs:
+  build-and-publish:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22 # >= 22.12 exigido pelo rcedit
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build and publish (electron-builder)
+        env:
+          # electron-builder lê o token daqui; o GITHUB_TOKEN embutido já tem
+          # permissão de escrita nas releases deste repositório.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run publish

@@ -31,6 +31,13 @@ Clique duas vezes em **"Abrir Poke Idle"** (na área de trabalho ou nesta pasta)
   mantendo os 30 mais recentes. Guarda preferências e a configuração de caças
   (hunts); **não guarda os tokens de login** (excluídos por segurança). Menu
   Ferramentas → "Fazer backup agora" / "Abrir pasta de backups".
+- **Limpar cache** (menu Ferramentas e bandeja): resolve travamento/tela branca
+  no carregamento. Faz backup antes e **não apaga** hunts/preferências nem, no
+  modo padrão, o login. Um segundo modo também sai do login (limpa cookies).
+- **Atualização com aviso**: o app checa updates ao abrir e a cada 6h. Menu
+  Ferramentas → "Verificar atualizações" agora mostra o resultado ("já está
+  atualizado", "baixando…", erro) e, quando a nova versão está pronta, pergunta
+  se quer reiniciar para instalar.
 - **Ferramentas de desenvolvedor** (F12) para inspecionar o jogo.
 - Menu "Jogo": Recarregar (Ctrl+R), Tela cheia (F11), Zoom (Ctrl +/-/0),
   Sempre no topo (Ctrl+Alt+T), Silenciar (Ctrl+Alt+M), Esconder na bandeja
@@ -69,3 +76,19 @@ com os argumentos `. --minimized`. Atalho rápido: tecla Windows + R, digite
 Só o arquivo `main.js` importa. Para trocar o jogo, mude a constante `GAME_URL`
 no topo dele. O ícone fica em `assets/pokeball.ico` (gerado a partir de
 `assets/pokeball.png`).
+
+Requer **Node ≥ 22.12** (exigência do `rcedit` no build). Veja `.nvmrc`.
+
+## Publicar uma atualização (para o app instalado receber)
+
+Só fazer `git push` do código **não** atualiza o app instalado — ele se atualiza
+lendo as **Releases** do GitHub (`latest.yml` + instalador). Publique uma versão:
+
+```
+npm version patch      # sobe a versão no package.json e cria commit + tag vX.Y.Z
+git push --follow-tags # a tag dispara o GitHub Actions, que builda e publica a Release
+```
+
+O workflow em `.github/workflows/release.yml` roda no GitHub e usa o
+`GITHUB_TOKEN` embutido — **não precisa de token na sua máquina**. Para buildar
+localmente sem publicar: `npm run dist` (gera o instalador em `dist/`).
