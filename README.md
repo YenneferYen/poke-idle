@@ -27,10 +27,16 @@ Clique duas vezes em **"Abrir Poke Idle"** (na área de trabalho ou nesta pasta)
 - **Lembra tamanho e posição** da janela entre sessões.
 - **Atalho global `Ctrl+Alt+P`**: mostra/esconde o jogo de qualquer lugar.
 - **Sempre no topo** (Ctrl+Alt+T) e **Silenciar áudio** (Ctrl+Alt+M).
+- **Alerta de desconexão**: se a sessão cair (o jogo volta para a tela de
+  login), você recebe uma **notificação do Windows** (clicável) e o tooltip da
+  bandeja avisa — para não perder tempo achando que está progredindo.
+- **Modo mini** (Ctrl+Alt+I ou pela bandeja): encolhe a janela num quadradinho
+  sempre-no-topo no canto da tela, com zoom reduzido, para acompanhar o jogo
+  enquanto você faz outra coisa. Alternar de novo volta ao tamanho e zoom de antes.
 - **Backup automático do localStorage** a cada 10 min em `userData/backups`,
   mantendo os 30 mais recentes. Guarda preferências e a configuração de caças
-  (hunts); **não guarda os tokens de login** (excluídos por segurança). Menu
-  Ferramentas → "Fazer backup agora" / "Abrir pasta de backups".
+  (hunts); **não guarda o token de login** (`pokeweb:tokens`, excluído por
+  segurança). Menu Ferramentas → "Fazer backup agora" / "Abrir pasta de backups".
 - **Limpar cache** (menu Ferramentas e bandeja): resolve travamento/tela branca
   no carregamento. Faz backup antes e **não apaga** hunts/preferências nem, no
   modo padrão, o login. Um segundo modo também sai do login (limpa cookies).

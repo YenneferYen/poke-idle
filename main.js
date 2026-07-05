@@ -8,6 +8,7 @@ const {
   globalShortcut,
   screen,
   dialog,
+  Notification,
 } = require('electron');
 const path = require('path');
 const fs = require('fs');
@@ -24,7 +25,13 @@ const BACKUP_INTERVAL_MS = 10 * 60 * 1000; // a cada 10 minutos
 const MAX_BACKUPS = 30; // mantém os 30 mais recentes (~5h de histórico)
 
 // Chaves sensíveis que NÃO devem ir para os arquivos de backup (tokens de login).
-const SENSITIVE_KEYS = ['accessToken', 'refreshToken'];
+// A chave real usada pelo jogo é 'pokeweb:tokens' (confirmado jul/2026). Antes
+// aqui havia 'accessToken'/'refreshToken', que NÃO existem — ou seja, o token de
+// login estava vazando para os arquivos de backup em texto puro.
+const SENSITIVE_KEYS = ['pokeweb:tokens', 'accessToken', 'refreshToken'];
+
+// Trecho de URL que indica que a sessão caiu (o app vai para a tela de login).
+const LOGIN_PATH = '/login';
 
 // Passado pelo atalho de inicialização do Windows: abre já minimizado.
 const START_MINIMIZED = process.argv.includes('--minimized');
@@ -55,6 +62,10 @@ let isQuitting = false; // vira true só quando o usuário escolhe "Sair" de ver
 let saveTimer = null;
 let backupTimer = null;
 let reloadTimer = null; // reconexão agendada (evita empilhar recarregamentos)
+let loggedOut = false; // true quando o app está na tela de login
+let miniMode = false; // true quando a janela está no "modo mini"
+let preMiniBounds = null; // tamanho/posição antes de entrar no modo mini
+let preMiniZoom = 1; // zoom antes de entrar no modo mini
 
 // ---------------------------------------------------------------------------
 // Memória da janela: lembra tamanho/posição entre sessões.
@@ -227,6 +238,75 @@ function toggleWindow() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Alerta de desconexão / logout.
+// Quando a sessão do jogo cai, o app navega para a tela de login (/login). Como
+// a janela costuma ficar minimizada/escondida num idle, avisamos com uma
+// notificação do Windows (clicável) e mudamos o tooltip da bandeja — assim você
+// não fica horas achando que está progredindo enquanto na verdade deslogou.
+// ---------------------------------------------------------------------------
+function handleNavigation(url) {
+  const onLogin = typeof url === 'string' && url.includes(LOGIN_PATH);
+  if (onLogin && !loggedOut) {
+    loggedOut = true;
+    if (tray) tray.setToolTip('Poke Idle — DESCONECTADO (faça login)');
+    try {
+      if (Notification.isSupported()) {
+        const n = new Notification({
+          title: 'Poke Idle — você foi desconectado',
+          body: 'A sessão caiu (tela de login). Clique para voltar e entrar de novo.',
+          icon: ICON_PATH,
+        });
+        n.on('click', showWindow);
+        n.show();
+      }
+    } catch {
+      /* notificações indisponíveis: ignora */
+    }
+  } else if (!onLogin && loggedOut) {
+    // Voltou para o jogo: limpa o estado de "desconectado".
+    loggedOut = false;
+    if (tray) tray.setToolTip('Poke Idle — o jogo continua rodando em segundo plano');
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Modo mini: encolhe a janela num quadradinho sempre-no-topo, no canto da tela,
+// para acompanhar o jogo enquanto você faz outra coisa. Alternar de novo volta
+// ao tamanho/posição e zoom anteriores.
+// ---------------------------------------------------------------------------
+function toggleMiniMode() {
+  if (!mainWin || mainWin.isDestroyed()) return;
+  const wc = mainWin.webContents;
+
+  if (!miniMode) {
+    preMiniBounds = mainWin.getBounds();
+    preMiniZoom = wc.getZoomFactor();
+    if (mainWin.isMaximized()) mainWin.unmaximize();
+
+    const area = screen.getDisplayMatching(mainWin.getBounds()).workArea;
+    const w = 480;
+    const h = 340;
+    const margin = 12;
+    mainWin.setMinimumSize(280, 200);
+    mainWin.setAlwaysOnTop(true);
+    mainWin.setBounds({
+      x: area.x + area.width - w - margin,
+      y: area.y + area.height - h - margin,
+      width: w,
+      height: h,
+    });
+    wc.setZoomFactor(0.6); // cabe mais coisa no espaço pequeno
+    showWindow();
+    miniMode = true;
+  } else {
+    mainWin.setAlwaysOnTop(false);
+    wc.setZoomFactor(preMiniZoom || 1);
+    if (preMiniBounds) mainWin.setBounds(preMiniBounds);
+    miniMode = false;
+  }
+}
+
 function createWindow() {
   const state = loadWindowState();
   const opts = {
@@ -292,6 +372,13 @@ function createWindow() {
     setTimeout(backupSave, 8000);
   });
 
+  // Detecta ida/volta da tela de login (para o alerta de desconexão). O jogo é
+  // uma SPA, então tanto navegação normal quanto de rota (in-page) importam.
+  mainWin.webContents.on('did-navigate', (_e, url) => handleNavigation(url));
+  mainWin.webContents.on('did-navigate-in-page', (_e, url, isMainFrame) => {
+    if (isMainFrame) handleNavigation(url);
+  });
+
   // Abre links externos (ex.: Discord do jogo) no navegador padrão, em vez de
   // dentro da janela do jogo.
   mainWin.webContents.setWindowOpenHandler(({ url }) => {
@@ -314,6 +401,7 @@ function createTray() {
   tray.setToolTip('Poke Idle — o jogo continua rodando em segundo plano');
   const trayMenu = Menu.buildFromTemplate([
     { label: 'Mostrar / Esconder', click: toggleWindow },
+    { label: 'Modo mini (canto da tela)', click: toggleMiniMode },
     { label: 'Recarregar jogo', click: () => mainWin && mainWin.reload() },
     { label: 'Limpar cache e recarregar', click: () => clearCache('cache') },
     {
@@ -452,6 +540,11 @@ app.whenReady().then(() => {
           type: 'checkbox',
           accelerator: 'CmdOrCtrl+Alt+M',
           click: (mi) => mainWin && mainWin.webContents.setAudioMuted(mi.checked),
+        },
+        {
+          label: 'Modo mini (canto da tela, sempre no topo)',
+          accelerator: 'CmdOrCtrl+Alt+I',
+          click: toggleMiniMode,
         },
         {
           label: 'Esconder na bandeja',
