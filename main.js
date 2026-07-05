@@ -66,6 +66,11 @@ let loggedOut = false; // true quando o app está na tela de login
 let miniMode = false; // true quando a janela está no "modo mini"
 let preMiniBounds = null; // tamanho/posição antes de entrar no modo mini
 let preMiniZoom = 1; // zoom antes de entrar no modo mini
+let connTimer = null; // poll do status de conexão do jogo
+let connDown = false; // true quando já avisamos que a conexão caiu
+let connMisses = 0; // leituras seguidas "desconectado" (evita alarme por blip)
+
+const CONN_POLL_MS = 20 * 1000; // frequência do vigia de conexão
 
 // ---------------------------------------------------------------------------
 // Memória da janela: lembra tamanho/posição entre sessões.
@@ -304,6 +309,75 @@ function toggleMiniMode() {
     wc.setZoomFactor(preMiniZoom || 1);
     if (preMiniBounds) mainWin.setBounds(preMiniBounds);
     miniMode = false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Vigia de conexão do jogo.
+// Dentro do jogo há um "pontinho" de status do chat (span.chat-dot): tem a
+// classe 'on' quando conectado. Se a conexão (websocket) cair, a página
+// continua aberta mas o jogo para de receber dados — o idle "trava" em silêncio,
+// sem ir para /login. Aqui lemos esse pontinho de tempos em tempos e avisamos.
+// Só leitura de DOM; não interage com o jogo.
+// ---------------------------------------------------------------------------
+function notifyConnection(reconnected) {
+  try {
+    if (!Notification.isSupported()) return;
+    const n = new Notification(
+      reconnected
+        ? {
+            title: 'Poke Idle — reconectado',
+            body: 'A conexão do jogo voltou.',
+            icon: ICON_PATH,
+          }
+        : {
+            title: 'Poke Idle — conexão caiu',
+            body: 'O jogo perdeu a conexão (o progresso idle pode ter parado). Clique para abrir.',
+            icon: ICON_PATH,
+          }
+    );
+    if (!reconnected) n.on('click', showWindow);
+    n.show();
+  } catch {
+    /* notificações indisponíveis: ignora */
+  }
+}
+
+async function pollConnection() {
+  if (!mainWin || mainWin.isDestroyed()) return;
+  let state = null;
+  try {
+    state = await mainWin.webContents.executeJavaScript(
+      "(()=>{const d=document.querySelector('.chat-dot');" +
+        "return d?{on:d.classList.contains('on')}:null;})()",
+      true
+    );
+  } catch {
+    return; // página não pronta: tenta no próximo ciclo
+  }
+  // Fora do jogo (login/landing não têm o pontinho): não é queda, apenas ignora.
+  if (!state) {
+    connMisses = 0;
+    return;
+  }
+
+  if (!state.on) {
+    connMisses++;
+    // Exige 2 leituras seguidas para não alarmar por um blip momentâneo.
+    if (connMisses >= 2 && !connDown) {
+      connDown = true;
+      if (tray) tray.setToolTip('Poke Idle — conexão caiu (reconectando…)');
+      notifyConnection(false);
+    }
+  } else {
+    if (connDown) {
+      connDown = false;
+      if (tray && !loggedOut) {
+        tray.setToolTip('Poke Idle — o jogo continua rodando em segundo plano');
+      }
+      notifyConnection(true);
+    }
+    connMisses = 0;
   }
 }
 
@@ -607,6 +681,9 @@ app.whenReady().then(() => {
   // Backup periódico do save enquanto o app estiver aberto.
   backupTimer = setInterval(backupSave, BACKUP_INTERVAL_MS);
 
+  // Vigia da conexão do jogo (avisa se o websocket cair).
+  connTimer = setInterval(pollConnection, CONN_POLL_MS);
+
   // Auto-atualização (só quando instalado). Verifica ao abrir e a cada 6h;
   // baixa em segundo plano e avisa quando estiver pronta para instalar. A
   // verificação automática é silenciosa (não incomoda se não houver update ou
@@ -632,6 +709,7 @@ app.on('before-quit', () => {
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
   clearInterval(backupTimer);
+  clearInterval(connTimer);
   clearTimeout(reloadTimer);
   if (powerBlockerId !== null && powerSaveBlocker.isStarted(powerBlockerId)) {
     powerSaveBlocker.stop(powerBlockerId);
