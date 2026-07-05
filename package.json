@@ -1,6 +1,6 @@
 {
   "name": "poke-idle",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Janela dedicada para o Poke Idle World que continua rodando em segundo plano (sem congelar a aba).",
   "main": "main.js",
   "author": "Poke Idle",
