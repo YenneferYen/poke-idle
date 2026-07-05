@@ -9,6 +9,7 @@ const {
   screen,
   dialog,
   Notification,
+  nativeImage,
 } = require('electron');
 const path = require('path');
 const fs = require('fs');
@@ -16,6 +17,7 @@ const { autoUpdater } = require('electron-updater');
 
 const GAME_URL = 'https://poke.idleworld.online/';
 const ICON_PATH = path.join(__dirname, 'assets', 'pokeball.ico');
+const PNG_ICON_PATH = path.join(__dirname, 'assets', 'pokeball.png');
 const TOGGLE_HOTKEY = 'CommandOrControl+Alt+P';
 
 // Backup automático do localStorage do jogo (preferências + caças poke:hunts:*).
@@ -65,12 +67,16 @@ let reloadTimer = null; // reconexão agendada (evita empilhar recarregamentos)
 let loggedOut = false; // true quando o app está na tela de login
 let miniMode = false; // true quando a janela está no "modo mini"
 let preMiniBounds = null; // tamanho/posição antes de entrar no modo mini
-let preMiniZoom = 1; // zoom antes de entrar no modo mini
 let connTimer = null; // poll do status de conexão do jogo
 let connDown = false; // true quando já avisamos que a conexão caiu
 let connMisses = 0; // leituras seguidas "desconectado" (evita alarme por blip)
+let trayIconOk = null; // ícone da bandeja: conectado (pontinho verde)
+let trayIconBad = null; // ícone da bandeja: problema (pontinho vermelho)
 
 const CONN_POLL_MS = 20 * 1000; // frequência do vigia de conexão
+
+// Preferências lembradas entre sessões (mudo, sempre-no-topo, zoom).
+const settings = { muted: false, alwaysOnTop: false, zoom: 1 };
 
 // ---------------------------------------------------------------------------
 // Memória da janela: lembra tamanho/posição entre sessões.
@@ -105,11 +111,36 @@ function saveWindowState() {
   const state = { isMaximized: mainWin.isMaximized() };
   const b = mainWin.getNormalBounds(); // bounds "restaurados", ignora maximizar/minimizar
   Object.assign(state, b);
+  // Preferências lembradas (usa os valores "de intenção", não o estado transitório
+  // do modo mini, que muda zoom/always-on-top temporariamente).
+  state.muted = settings.muted;
+  state.alwaysOnTop = settings.alwaysOnTop;
+  state.zoom = settings.zoom;
   try {
     fs.writeFileSync(STATE_FILE, JSON.stringify(state));
   } catch {
     /* disco cheio / sem permissão: apenas ignora */
   }
+}
+
+// Carrega as preferências salvas para o objeto `settings`.
+function loadSettings() {
+  const s = loadWindowState();
+  settings.muted = !!s.muted;
+  settings.alwaysOnTop = !!s.alwaysOnTop;
+  settings.zoom = typeof s.zoom === 'number' && s.zoom > 0 ? s.zoom : 1;
+}
+
+// Ajusta o zoom (com limites), aplica na janela e agenda gravação da preferência.
+function setZoom(z) {
+  settings.zoom = Math.min(3, Math.max(0.3, z));
+  if (mainWin && !mainWin.isDestroyed() && !miniMode) {
+    mainWin.webContents.setZoomFactor(settings.zoom);
+  }
+  scheduleSave();
+}
+function changeZoom(delta) {
+  setZoom((settings.zoom || 1) + delta);
 }
 
 // Evita gravar em disco a cada pixel: agrupa em 500ms.
@@ -254,7 +285,7 @@ function handleNavigation(url) {
   const onLogin = typeof url === 'string' && url.includes(LOGIN_PATH);
   if (onLogin && !loggedOut) {
     loggedOut = true;
-    if (tray) tray.setToolTip('Poke Idle — DESCONECTADO (faça login)');
+    updateTrayStatus();
     try {
       if (Notification.isSupported()) {
         const n = new Notification({
@@ -271,7 +302,7 @@ function handleNavigation(url) {
   } else if (!onLogin && loggedOut) {
     // Voltou para o jogo: limpa o estado de "desconectado".
     loggedOut = false;
-    if (tray) tray.setToolTip('Poke Idle — o jogo continua rodando em segundo plano');
+    updateTrayStatus();
   }
 }
 
@@ -286,7 +317,6 @@ function toggleMiniMode() {
 
   if (!miniMode) {
     preMiniBounds = mainWin.getBounds();
-    preMiniZoom = wc.getZoomFactor();
     if (mainWin.isMaximized()) mainWin.unmaximize();
 
     const area = screen.getDisplayMatching(mainWin.getBounds()).workArea;
@@ -305,8 +335,9 @@ function toggleMiniMode() {
     showWindow();
     miniMode = true;
   } else {
-    mainWin.setAlwaysOnTop(false);
-    wc.setZoomFactor(preMiniZoom || 1);
+    // Restaura as preferências (não o estado transitório do modo mini).
+    mainWin.setAlwaysOnTop(settings.alwaysOnTop);
+    wc.setZoomFactor(settings.zoom || 1);
     if (preMiniBounds) mainWin.setBounds(preMiniBounds);
     miniMode = false;
   }
@@ -366,15 +397,13 @@ async function pollConnection() {
     // Exige 2 leituras seguidas para não alarmar por um blip momentâneo.
     if (connMisses >= 2 && !connDown) {
       connDown = true;
-      if (tray) tray.setToolTip('Poke Idle — conexão caiu (reconectando…)');
+      updateTrayStatus();
       notifyConnection(false);
     }
   } else {
     if (connDown) {
       connDown = false;
-      if (tray && !loggedOut) {
-        tray.setToolTip('Poke Idle — o jogo continua rodando em segundo plano');
-      }
+      updateTrayStatus();
       notifyConnection(true);
     }
     connMisses = 0;
@@ -403,6 +432,10 @@ function createWindow() {
   }
 
   mainWin = new BrowserWindow(opts);
+  // Aplica preferências lembradas (mudo e sempre-no-topo persistem no reload;
+  // o zoom é reaplicado a cada carregamento, mais abaixo).
+  mainWin.setAlwaysOnTop(settings.alwaysOnTop);
+  mainWin.webContents.setAudioMuted(settings.muted);
   mainWin.loadURL(GAME_URL);
 
   mainWin.once('ready-to-show', () => {
@@ -441,9 +474,23 @@ function createWindow() {
   mainWin.webContents.on('render-process-gone', () => scheduleReload(2000));
 
   // Faz um backup logo após cada carregamento (dá um tempo pro jogo popular o
-  // localStorage antes de copiar).
+  // localStorage antes de copiar). Também reaplica mudo e zoom (o zoom volta ao
+  // padrão a cada navegação, então precisa ser re-setado aqui).
   mainWin.webContents.on('did-finish-load', () => {
+    mainWin.webContents.setAudioMuted(settings.muted);
+    if (!miniMode) mainWin.webContents.setZoomFactor(settings.zoom);
     setTimeout(backupSave, 8000);
+  });
+
+  // Zoom por Ctrl+scroll: persiste a preferência (ignora enquanto no modo mini).
+  mainWin.webContents.on('zoom-changed', () => {
+    if (miniMode) return;
+    setTimeout(() => {
+      if (mainWin && !mainWin.isDestroyed()) {
+        settings.zoom = mainWin.webContents.getZoomFactor();
+        scheduleSave();
+      }
+    }, 50);
   });
 
   // Detecta ida/volta da tela de login (para o alerta de desconexão). O jogo é
@@ -469,9 +516,53 @@ function createWindow() {
   });
 }
 
+// Gera o ícone da bandeja com um pontinho de status sobreposto no canto inferior
+// direito da pokébola. `dotBGR` é a cor no formato do bitmap (BGR).
+function makeTrayIcon(dotBGR) {
+  const base = nativeImage.createFromPath(PNG_ICON_PATH);
+  if (base.isEmpty()) return nativeImage.createFromPath(ICON_PATH);
+  const { width, height } = base.getSize();
+  const buf = base.toBitmap(); // BGRA
+  const r = Math.max(3, Math.round(width * 0.24));
+  const cx = width - r - Math.round(width * 0.06);
+  const cy = height - r - Math.round(height * 0.06);
+  const [b, g, rr] = dotBGR;
+  for (let y = cy - r - 1; y <= cy + r + 1; y++) {
+    for (let x = cx - r - 1; x <= cx + r + 1; x++) {
+      if (x < 0 || y < 0 || x >= width || y >= height) continue;
+      const dx = x - cx;
+      const dy = y - cy;
+      if (dx * dx + dy * dy <= r * r) {
+        const i = (y * width + x) * 4;
+        buf[i] = b;
+        buf[i + 1] = g;
+        buf[i + 2] = rr;
+        buf[i + 3] = 255;
+      }
+    }
+  }
+  return nativeImage.createFromBitmap(buf, { width, height });
+}
+
+// Reflete o estado (conexão/login) no ícone e no tooltip da bandeja.
+function updateTrayStatus() {
+  if (!tray) return;
+  const problem = loggedOut || connDown;
+  if (trayIconOk && trayIconBad) tray.setImage(problem ? trayIconBad : trayIconOk);
+  tray.setToolTip(
+    loggedOut
+      ? 'Poke Idle — DESCONECTADO (faça login)'
+      : connDown
+        ? 'Poke Idle — conexão caiu (reconectando…)'
+        : 'Poke Idle — o jogo continua rodando em segundo plano'
+  );
+}
+
 // Ícone na bandeja (ao lado do relógio), com menu de contexto.
 function createTray() {
-  tray = new Tray(ICON_PATH);
+  trayIconOk = makeTrayIcon([40, 180, 40]); // verde (BGR)
+  trayIconBad = makeTrayIcon([40, 40, 220]); // vermelho (BGR)
+  tray = new Tray(trayIconOk);
   tray.setToolTip('Poke Idle — o jogo continua rodando em segundo plano');
   const trayMenu = Menu.buildFromTemplate([
     { label: 'Mostrar / Esconder', click: toggleWindow },
@@ -592,6 +683,8 @@ app.on('second-instance', () => {
 });
 
 app.whenReady().then(() => {
+  loadSettings(); // carrega mudo/topo/zoom antes de montar o menu (para os checkboxes)
+
   const menu = Menu.buildFromTemplate([
     {
       label: 'Jogo',
@@ -599,26 +692,43 @@ app.whenReady().then(() => {
         { label: 'Recarregar', accelerator: 'CmdOrCtrl+R', role: 'reload' },
         { label: 'Tela cheia', accelerator: 'F11', role: 'togglefullscreen' },
         { type: 'separator' },
-        { label: 'Aumentar zoom', accelerator: 'CmdOrCtrl+=', role: 'zoomIn' },
-        { label: 'Diminuir zoom', accelerator: 'CmdOrCtrl+-', role: 'zoomOut' },
-        { label: 'Zoom normal', accelerator: 'CmdOrCtrl+0', role: 'resetZoom' },
+        { label: 'Aumentar zoom', accelerator: 'CmdOrCtrl+=', click: () => changeZoom(0.1) },
+        { label: 'Diminuir zoom', accelerator: 'CmdOrCtrl+-', click: () => changeZoom(-0.1) },
+        { label: 'Zoom normal', accelerator: 'CmdOrCtrl+0', click: () => setZoom(1) },
         { type: 'separator' },
         {
           label: 'Sempre no topo',
           type: 'checkbox',
+          checked: settings.alwaysOnTop,
           accelerator: 'CmdOrCtrl+Alt+T',
-          click: (mi) => mainWin && mainWin.setAlwaysOnTop(mi.checked),
+          click: (mi) => {
+            settings.alwaysOnTop = mi.checked;
+            if (mainWin) mainWin.setAlwaysOnTop(mi.checked);
+            scheduleSave();
+          },
         },
         {
           label: 'Silenciar áudio',
           type: 'checkbox',
+          checked: settings.muted,
           accelerator: 'CmdOrCtrl+Alt+M',
-          click: (mi) => mainWin && mainWin.webContents.setAudioMuted(mi.checked),
+          click: (mi) => {
+            settings.muted = mi.checked;
+            if (mainWin) mainWin.webContents.setAudioMuted(mi.checked);
+            scheduleSave();
+          },
         },
         {
           label: 'Modo mini (canto da tela, sempre no topo)',
           accelerator: 'CmdOrCtrl+Alt+I',
           click: toggleMiniMode,
+        },
+        {
+          label: 'Iniciar com o Windows (minimizado)',
+          type: 'checkbox',
+          checked: app.getLoginItemSettings().openAtLogin,
+          click: (mi) =>
+            app.setLoginItemSettings({ openAtLogin: mi.checked, args: ['--minimized'] }),
         },
         {
           label: 'Esconder na bandeja',

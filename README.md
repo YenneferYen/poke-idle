@@ -26,7 +26,13 @@ Clique duas vezes em **"Abrir Poke Idle"** (na área de trabalho ou nesta pasta)
   o jogo sozinho.
 - **Lembra tamanho e posição** da janela entre sessões.
 - **Atalho global `Ctrl+Alt+P`**: mostra/esconde o jogo de qualquer lugar.
-- **Sempre no topo** (Ctrl+Alt+T) e **Silenciar áudio** (Ctrl+Alt+M).
+- **Sempre no topo** (Ctrl+Alt+T), **Silenciar áudio** (Ctrl+Alt+M) e **zoom**
+  agora são **lembrados entre sessões** (não resetam ao reabrir).
+- **Iniciar com o Windows (minimizado)**: um checkbox no menu Jogo liga/desliga
+  o início automático — não precisa mais criar atalho na pasta de inicialização.
+- **Ícone da bandeja dinâmico**: a pokébola ganha um pontinho **verde** quando
+  está tudo conectado e **vermelho** quando a conexão caiu / você deslogou, para
+  ver o status de relance sem abrir a janela.
 - **Alerta de desconexão**: em dois casos você recebe uma **notificação do
   Windows** (clicável) e o tooltip da bandeja avisa — (1) a sessão expira e o
   jogo volta para a tela de login, e (2) a conexão (websocket) do jogo cai, que
@@ -76,9 +82,11 @@ tarefas, rodando em segundo plano — útil para um atalho de inicialização.
 
 ## Iniciar junto com o Windows (opcional)
 
-Coloque um atalho na pasta de Inicialização apontando para o `electron.exe`
-com os argumentos `. --minimized`. Atalho rápido: tecla Windows + R, digite
-`shell:startup`, e crie ali um atalho para o app.
+Jeito fácil: menu **Jogo → "Iniciar com o Windows (minimizado)"** (marca/desmarca).
+
+Manual (alternativa): coloque um atalho na pasta de Inicialização apontando para
+o `electron.exe` com os argumentos `. --minimized`. Atalho rápido: tecla
+Windows + R, digite `shell:startup`, e crie ali um atalho para o app.
 
 ## Atualizar / mexer
 
