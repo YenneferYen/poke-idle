@@ -67,6 +67,9 @@ let reloadTimer = null; // reconexão agendada (evita empilhar recarregamentos)
 let loggedOut = false; // true quando o app está na tela de login
 let miniMode = false; // true quando a janela está no "modo mini"
 let preMiniBounds = null; // tamanho/posição antes de entrar no modo mini
+let miniCssKey = null; // chave do CSS injetado que enxuga a HUD no modo mini
+let startInMini = false; // true se a última sessão foi fechada no modo mini
+let miniRestored = false; // garante que só restauramos o mini uma vez ao abrir
 let connTimer = null; // poll do status de conexão do jogo
 let connDown = false; // true quando já avisamos que a conexão caiu
 let connMisses = 0; // leituras seguidas "desconectado" (evita alarme por blip)
@@ -109,13 +112,16 @@ function boundsOnScreen(b) {
 function saveWindowState() {
   if (!mainWin || mainWin.isDestroyed()) return;
   const state = { isMaximized: mainWin.isMaximized() };
-  const b = mainWin.getNormalBounds(); // bounds "restaurados", ignora maximizar/minimizar
+  // Se está no modo mini, salva as bounds "de verdade" (pré-mini), não as do
+  // quadradinho — assim, ao reabrir, a janela normal volta ao tamanho certo.
+  const b = miniMode && preMiniBounds ? preMiniBounds : mainWin.getNormalBounds();
   Object.assign(state, b);
   // Preferências lembradas (usa os valores "de intenção", não o estado transitório
   // do modo mini, que muda zoom/always-on-top temporariamente).
   state.muted = settings.muted;
   state.alwaysOnTop = settings.alwaysOnTop;
   state.zoom = settings.zoom;
+  state.mini = miniMode; // lembra se estava no modo mini
   try {
     fs.writeFileSync(STATE_FILE, JSON.stringify(state));
   } catch {
@@ -129,6 +135,7 @@ function loadSettings() {
   settings.muted = !!s.muted;
   settings.alwaysOnTop = !!s.alwaysOnTop;
   settings.zoom = typeof s.zoom === 'number' && s.zoom > 0 ? s.zoom : 1;
+  startInMini = !!s.mini;
 }
 
 // Ajusta o zoom (com limites), aplica na janela e agenda gravação da preferência.
@@ -307,6 +314,41 @@ function handleNavigation(url) {
 }
 
 // ---------------------------------------------------------------------------
+// CSS injetado no modo mini: esconde a "bagunça" da HUD (barra de ícones do
+// topo, chat, painel do Auto-Helper e o botão do mercado), deixando o essencial
+// para acompanhar o idle: o time (div.phud) e os painéis de captura/batalha, que
+// aparecem por cima do mapa durante os encontros. É totalmente reversível
+// (removido ao sair do modo mini). Seletores mapeados da HUD logada em jul/2026.
+// ---------------------------------------------------------------------------
+const MINI_HIDE_CSS = [
+  'nav.game-dock',
+  'div.chat-box',
+  'div.ah-panel',
+  'button.market-cta',
+].join(',') + '{display:none !important;}';
+
+async function applyMiniHudCss() {
+  if (!mainWin || mainWin.isDestroyed()) return;
+  try {
+    miniCssKey = await mainWin.webContents.insertCSS(MINI_HIDE_CSS);
+  } catch (_) {
+    /* ignora */
+  }
+}
+
+async function clearMiniHudCss() {
+  const wc = mainWin && !mainWin.isDestroyed() ? mainWin.webContents : null;
+  if (wc && miniCssKey) {
+    try {
+      await wc.removeInsertedCSS(miniCssKey);
+    } catch (_) {
+      /* ignora */
+    }
+  }
+  miniCssKey = null;
+}
+
+// ---------------------------------------------------------------------------
 // Modo mini: encolhe a janela num quadradinho sempre-no-topo, no canto da tela,
 // para acompanhar o jogo enquanto você faz outra coisa. Alternar de novo volta
 // ao tamanho/posição e zoom anteriores.
@@ -333,9 +375,13 @@ function toggleMiniMode() {
     });
     wc.setZoomFactor(0.6); // cabe mais coisa no espaço pequeno
     showWindow();
+    mainWin.setOpacity(0.92); // levemente transparente, discreto sobre outras janelas
     miniMode = true;
+    applyMiniHudCss(); // enxuga a HUD (esconde barra/chat/auto-helper)
   } else {
     // Restaura as preferências (não o estado transitório do modo mini).
+    clearMiniHudCss(); // devolve a HUD completa
+    mainWin.setOpacity(1);
     mainWin.setAlwaysOnTop(settings.alwaysOnTop);
     wc.setZoomFactor(settings.zoom || 1);
     if (preMiniBounds) mainWin.setBounds(preMiniBounds);
@@ -479,6 +525,18 @@ function createWindow() {
   mainWin.webContents.on('did-finish-load', () => {
     mainWin.webContents.setAudioMuted(settings.muted);
     if (!miniMode) mainWin.webContents.setZoomFactor(settings.zoom);
+    // Recarregar (ex.: reconexão) descarta o CSS injetado; reaplica se estiver no mini.
+    if (miniMode) {
+      miniCssKey = null;
+      applyMiniHudCss();
+    }
+    // Se a última sessão foi fechada no modo mini, restaura o mini (uma vez).
+    if (startInMini && !miniRestored) {
+      miniRestored = true;
+      setTimeout(() => {
+        if (mainWin && !mainWin.isDestroyed() && !miniMode) toggleMiniMode();
+      }, 1500);
+    }
     setTimeout(backupSave, 8000);
   });
 
