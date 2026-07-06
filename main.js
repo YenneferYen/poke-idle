@@ -73,6 +73,7 @@ let miniRestored = false; // garante que só restauramos o mini uma vez ao abrir
 let connTimer = null; // poll do status de conexão do jogo
 let connDown = false; // true quando já avisamos que a conexão caiu
 let connMisses = 0; // leituras seguidas "desconectado" (evita alarme por blip)
+let chatDotMissingWarned = false; // avisa 1x se o seletor do vigia sumir (layout mudou)
 let trayIconOk = null; // ícone da bandeja: conectado (pontinho verde)
 let trayIconBad = null; // ícone da bandeja: problema (pontinho vermelho)
 
@@ -331,8 +332,8 @@ async function applyMiniHudCss() {
   if (!mainWin || mainWin.isDestroyed()) return;
   try {
     miniCssKey = await mainWin.webContents.insertCSS(MINI_HIDE_CSS);
-  } catch (_) {
-    /* ignora */
+  } catch (e) {
+    console.warn('[Poke Idle] Falha ao aplicar o CSS do modo mini:', e && e.message);
   }
 }
 
@@ -435,8 +436,18 @@ async function pollConnection() {
   // Fora do jogo (login/landing não têm o pontinho): não é queda, apenas ignora.
   if (!state) {
     connMisses = 0;
+    // Se estamos no jogo (não deslogado) e mesmo assim o pontinho não existe, o
+    // layout do jogo provavelmente mudou — avisa uma vez para facilitar o ajuste.
+    if (!loggedOut && !chatDotMissingWarned) {
+      chatDotMissingWarned = true;
+      console.warn(
+        '[Poke Idle] .chat-dot não encontrado com o jogo aberto — o layout do ' +
+          'jogo pode ter mudado; o vigia de conexão pode precisar de ajuste.'
+      );
+    }
     return;
   }
+  chatDotMissingWarned = false; // achou o pontinho: reseta o aviso
 
   if (!state.on) {
     connMisses++;
@@ -566,6 +577,33 @@ function createWindow() {
       return { action: 'deny' };
     }
     return { action: 'allow' };
+  });
+
+  // Segurança: mantém a NAVEGAÇÃO da janela principal presa ao domínio do jogo.
+  // Se o site (ou um comprometimento dele/redirect) tentar levar a janela para
+  // fora, cancela e abre no navegador externo — evita a janela do app virar uma
+  // página de phishing com o ícone/nome "Poke Idle".
+  mainWin.webContents.on('will-navigate', (e, url) => {
+    let u;
+    try {
+      u = new URL(url);
+    } catch {
+      e.preventDefault();
+      return;
+    }
+    const host = u.hostname;
+    const allowed = host === 'poke.idleworld.online' || host.endsWith('.idleworld.online');
+    if (!allowed) {
+      e.preventDefault();
+      if (u.protocol === 'http:' || u.protocol === 'https:') shell.openExternal(url);
+    }
+  });
+
+  // Segurança: nega pedidos de permissão do navegador (câmera, microfone,
+  // geolocalização, notificação do site, etc.). O app não usa nada disso — as
+  // notificações são geradas pelo processo principal (API do Electron).
+  mainWin.webContents.session.setPermissionRequestHandler((_wc, _perm, callback) => {
+    callback(false);
   });
 
   mainWin.on('closed', () => {

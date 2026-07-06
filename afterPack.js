@@ -14,16 +14,23 @@ exports.default = async function (context) {
   const exePath = path.join(context.appOutDir, `${app.productFilename}.exe`);
   const icon = path.join(__dirname, 'assets', 'pokeball.ico');
 
-  await rcedit(exePath, {
-    icon,
-    'file-version': app.version,
-    'product-version': app.version,
-    'version-string': {
-      ProductName: 'Poke Idle',
-      FileDescription: 'Poke Idle',
-      CompanyName: 'Poke Idle',
-      LegalCopyright: '',
-      OriginalFilename: `${app.productFilename}.exe`,
-    },
-  });
+  try {
+    await rcedit(exePath, {
+      icon,
+      'file-version': app.version,
+      'product-version': app.version,
+      'version-string': {
+        ProductName: 'Poke Idle',
+        FileDescription: 'Poke Idle',
+        CompanyName: 'Poke Idle',
+        LegalCopyright: '',
+        OriginalFilename: `${app.productFilename}.exe`,
+      },
+    });
+  } catch (e) {
+    // Falha aqui = executável sem ícone/metadados. Loga claro e propaga para o
+    // build falhar de forma visível (melhor que gerar um .exe "sem cara" calado).
+    console.error('[afterPack] rcedit falhou ao aplicar ícone/metadados em ' + exePath + ':', e);
+    throw e;
+  }
 };
