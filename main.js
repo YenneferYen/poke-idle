@@ -58,6 +58,8 @@ if (!gotLock) {
 }
 
 let mainWin = null;
+let splashWin = null; // tela de carregamento (fecha quando o jogo aparece)
+let aboutWin = null; // janela "Sobre"
 let tray = null;
 let powerBlockerId = null;
 let isQuitting = false; // vira true só quando o usuário escolhe "Sair" de verdade
@@ -467,6 +469,66 @@ async function pollConnection() {
   }
 }
 
+// Tela de carregamento: janelinha sem moldura com a Pokébola, mostrada enquanto
+// o jogo carrega. Fecha quando a janela principal está pronta (ou por segurança
+// após um tempo, para nunca ficar presa).
+function createSplash() {
+  splashWin = new BrowserWindow({
+    width: 400,
+    height: 320,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    movable: true,
+    center: true,
+    show: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
+    backgroundColor: '#00000000',
+    icon: ICON_PATH,
+    webPreferences: {},
+  });
+  splashWin.loadFile(path.join(__dirname, 'splash.html'));
+  splashWin.once('ready-to-show', () => {
+    if (splashWin && !splashWin.isDestroyed()) splashWin.show();
+  });
+  // Segurança: se algo travar no carregamento, não deixa a splash eterna.
+  setTimeout(closeSplash, 30000);
+}
+
+function closeSplash() {
+  if (splashWin && !splashWin.isDestroyed()) splashWin.close();
+  splashWin = null;
+}
+
+// Janela "Sobre": versão, novidades e atalhos, no estilo do app.
+function createAboutWindow() {
+  if (aboutWin && !aboutWin.isDestroyed()) {
+    aboutWin.focus();
+    return;
+  }
+  aboutWin = new BrowserWindow({
+    width: 440,
+    height: 580,
+    frame: false,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    title: 'Sobre o Poke Idle',
+    backgroundColor: '#15161b',
+    icon: ICON_PATH,
+    parent: mainWin && !mainWin.isDestroyed() ? mainWin : undefined,
+    show: false,
+    webPreferences: {},
+  });
+  aboutWin.loadFile(path.join(__dirname, 'about.html'), { query: { v: app.getVersion() } });
+  aboutWin.once('ready-to-show', () => aboutWin.show());
+  aboutWin.on('closed', () => {
+    aboutWin = null;
+  });
+}
+
 function createWindow() {
   const state = loadWindowState();
   const opts = {
@@ -496,6 +558,7 @@ function createWindow() {
   mainWin.loadURL(GAME_URL);
 
   mainWin.once('ready-to-show', () => {
+    closeSplash(); // o jogo está pronto: tira a tela de carregamento
     if (state.isMaximized) mainWin.maximize();
     if (START_MINIMIZED) {
       mainWin.minimize();
@@ -872,6 +935,8 @@ app.whenReady().then(() => {
           label: 'Limpar cache e sair do login (mantém o save)',
           click: () => clearCache('full'),
         },
+        { type: 'separator' },
+        { label: 'Sobre o Poke Idle', click: () => createAboutWindow() },
       ],
     },
   ]);
@@ -879,6 +944,7 @@ app.whenReady().then(() => {
 
   startPowerBlocker();
   createTray();
+  if (!START_MINIMIZED) createSplash(); // tela de carregamento (some quando o jogo abre)
   createWindow();
 
   // Atalho global: mostra/esconde o jogo de qualquer lugar.

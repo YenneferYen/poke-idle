@@ -11,7 +11,8 @@
   "scripts": {
     "start": "electron .",
     "dist": "electron-builder --win --publish never",
-    "publish": "electron-builder --win --publish always"
+    "publish": "electron-builder --win --publish always",
+    "update-data": "node update-gamedata.js"
   },
   "build": {
     "appId": "com.poke.idle",
@@ -22,6 +23,8 @@
     },
     "files": [
       "main.js",
+      "splash.html",
+      "about.html",
       "package.json",
       "assets/**/*"
     ],

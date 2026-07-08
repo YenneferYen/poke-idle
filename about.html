@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<style>
+  @font-face {
+    font-family: 'Fredoka';
+    src: url('assets/fonts/Fredoka.ttf') format('truetype');
+    font-weight: 300 700;
+    font-display: block;
+  }
+  :root {
+    --bg: #15161b;
+    --card: #1e1f26;
+    --line: #2a2b33;
+    --accent: #ee1c25;
+    --txt: #f2f2f4;
+    --txt2: #9a9ba3;
+    --radius: 14px;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%;
+    background: var(--bg); color: var(--txt);
+    font-family: 'Fredoka', system-ui, sans-serif;
+    -webkit-user-select: none; user-select: none;
+    overflow: hidden;
+  }
+  .win { display: flex; flex-direction: column; height: 100vh; }
+
+  header {
+    -webkit-app-region: drag;
+    display: flex; align-items: center; gap: 12px;
+    padding: 16px 16px 12px;
+    position: relative;
+  }
+  header .ball { width: 46px; height: 46px; filter: drop-shadow(0 4px 10px rgba(0,0,0,.5)); }
+  header .name { font-size: 22px; font-weight: 600; line-height: 1; }
+  header .name b { color: var(--accent); font-weight: 700; }
+  header .ver { font-size: 12.5px; color: var(--txt2); margin-top: 3px; }
+  .close {
+    -webkit-app-region: no-drag;
+    position: absolute; top: 12px; right: 12px;
+    width: 26px; height: 26px; border: none; border-radius: 8px;
+    background: #24252d; color: var(--txt2); font-size: 15px; cursor: default;
+    display: grid; place-items: center; transition: background .15s, color .15s;
+  }
+  .close:hover { background: var(--accent); color: #fff; }
+
+  main { padding: 4px 16px 16px; overflow-y: auto; }
+  .section-title {
+    font-size: 12px; text-transform: uppercase; letter-spacing: .6px;
+    color: var(--txt2); margin: 14px 4px 8px;
+  }
+  .card {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 4px 14px;
+  }
+  .row {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 14px;
+  }
+  .row:last-child { border-bottom: none; }
+  .row .k { color: var(--txt2); }
+  kbd {
+    font-family: 'Fredoka', monospace; font-size: 12.5px; color: var(--txt);
+    background: #2b2c35; border: 1px solid #383943; border-radius: 7px;
+    padding: 3px 8px; white-space: nowrap;
+  }
+  .log { font-size: 13.5px; line-height: 1.5; }
+  .log p { margin: 9px 0; color: #d9d9de; }
+  .log .tag {
+    display: inline-block; min-width: 46px; color: var(--accent);
+    font-weight: 600; margin-right: 6px;
+  }
+  footer {
+    padding: 12px 16px; border-top: 1px solid var(--line);
+    font-size: 12px; color: var(--txt2); text-align: center;
+  }
+</style>
+</head>
+<body>
+  <div class="win">
+    <header>
+      <img class="ball" src="assets/pokeball.png" alt="" />
+      <div>
+        <div class="name">Poke<b>Idle</b></div>
+        <div class="ver" id="ver">versão —</div>
+      </div>
+      <button class="close" id="close" title="Fechar">✕</button>
+    </header>
+
+    <main>
+      <div class="section-title">Novidades</div>
+      <div class="card log">
+        <p><span class="tag">1.0.7</span>Cara nova: tela de carregamento e esta janela, com identidade própria.</p>
+        <p><span class="tag">1.0.6</span>Segurança: navegação presa ao domínio do jogo e permissões do navegador negadas.</p>
+        <p><span class="tag">1.0.5</span>Modo mini enxuto (esconde barra e chat), lembra o mini e janela semitransparente.</p>
+      </div>
+
+      <div class="section-title">Atalhos</div>
+      <div class="card">
+        <div class="row"><span class="k">Mostrar / esconder</span><kbd>Ctrl+Alt+P</kbd></div>
+        <div class="row"><span class="k">Modo mini</span><kbd>Ctrl+Alt+I</kbd></div>
+        <div class="row"><span class="k">Sempre no topo</span><kbd>Ctrl+Alt+T</kbd></div>
+        <div class="row"><span class="k">Silenciar áudio</span><kbd>Ctrl+Alt+M</kbd></div>
+        <div class="row"><span class="k">Esconder na bandeja</span><kbd>Ctrl+H</kbd></div>
+        <div class="row"><span class="k">Recarregar</span><kbd>Ctrl+R</kbd></div>
+        <div class="row"><span class="k">Tela cheia</span><kbd>F11</kbd></div>
+        <div class="row"><span class="k">Zoom</span><kbd>Ctrl + / − / 0</kbd></div>
+        <div class="row"><span class="k">Sair</span><kbd>Ctrl+Q</kbd></div>
+      </div>
+    </main>
+
+    <footer>Poke Idle World · fan-made · Pokémon © Nintendo, Creatures, GAME FREAK</footer>
+  </div>
+
+  <script>
+    var v = new URLSearchParams(location.search).get('v');
+    if (v) document.getElementById('ver').textContent = 'versão ' + v;
+    document.getElementById('close').addEventListener('click', function () { window.close(); });
+  </script>
+</body>
+</html>

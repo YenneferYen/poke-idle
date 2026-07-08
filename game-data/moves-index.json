@@ -1,0 +1,218 @@
+{
+  "FIRE": {
+    "file": "fire.png",
+    "frameW": 100,
+    "frameH": 100,
+    "frames": 16,
+    "frameMs": 50,
+    "scale": 1.0,
+    "offset": [
+      0.0,
+      0.0
+    ]
+  },
+  "ELECTRIC": {
+    "file": "electric.png",
+    "frameW": 96,
+    "frameH": 118,
+    "frames": 10,
+    "frameMs": 80,
+    "scale": 1.0,
+    "offset": [
+      0.0,
+      0.0
+    ]
+  },
+  "FIGHTING": {
+    "file": "fighting.png",
+    "frameW": 181,
+    "frameH": 185,
+    "frames": 10,
+    "frameMs": 80,
+    "scale": 1.0,
+    "offset": [
+      0.0,
+      0.0
+    ]
+  },
+  "GHOST": {
+    "file": "ghost.png",
+    "frameW": 192,
+    "frameH": 192,
+    "frames": 26,
+    "frameMs": 33,
+    "scale": 0.667,
+    "offset": [
+      0.0,
+      0.0
+    ]
+  },
+  "POISON": {
+    "file": "poison.png",
+    "frameW": 60,
+    "frameH": 40,
+    "frames": 25,
+    "frameMs": 33,
+    "scale": 1.4,
+    "offset": [
+      0.0,
+      0.0
+    ]
+  },
+  "FLYING": {
+    "file": "flying.png",
+    "frameW": 61,
+    "frameH": 81,
+    "frames": 20,
+    "frameMs": 40,
+    "scale": 1.0,
+    "offset": [
+      0.0,
+      0.0
+    ]
+  },
+  "NORMAL": {
+    "file": "normal.png",
+    "frameW": 64,
+    "frameH": 54,
+    "frames": 10,
+    "frameMs": 80,
+    "scale": 1.4,
+    "offset": [
+      0.0,
+      0.0
+    ]
+  },
+  "BUG": {
+    "file": "bug.png",
+    "frameW": 80,
+    "frameH": 96,
+    "frames": 4,
+    "frameMs": 90,
+    "scale": 1.0,
+    "offset": [
+      0.0,
+      0.0
+    ]
+  },
+  "GRASS": {
+    "file": "grass.png",
+    "frameW": 73,
+    "frameH": 70,
+    "frames": 15,
+    "frameMs": 53,
+    "scale": 1.4,
+    "offset": [
+      0.0,
+      0.0
+    ]
+  },
+  "STEEL": {
+    "file": "steel.png",
+    "frameW": 63,
+    "frameH": 64,
+    "frames": 5,
+    "frameMs": 90,
+    "scale": 1.0,
+    "offset": [
+      0.0,
+      0.0
+    ]
+  },
+  "WATER": {
+    "file": "water.png",
+    "frameW": 243,
+    "frameH": 246,
+    "frames": 12,
+    "frameMs": 67,
+    "scale": 0.52,
+    "offset": [
+      -0.6,
+      -0.7
+    ]
+  },
+  "DRAGON": {
+    "file": "dragon.png",
+    "frameW": 94,
+    "frameH": 96,
+    "frames": 12,
+    "frameMs": 67,
+    "scale": 1.0,
+    "offset": [
+      0.0,
+      0.0
+    ]
+  },
+  "GROUND": {
+    "file": "ground.png",
+    "frameW": 64,
+    "frameH": 61,
+    "frames": 11,
+    "frameMs": 73,
+    "scale": 1.0,
+    "offset": [
+      0.0,
+      0.0
+    ]
+  },
+  "PSYCHIC": {
+    "file": "psychic.png",
+    "frameW": 88,
+    "frameH": 88,
+    "frames": 14,
+    "frameMs": 57,
+    "scale": 1.0,
+    "offset": [
+      0.0,
+      0.0
+    ]
+  },
+  "ROCK": {
+    "file": "rock.png",
+    "frameW": 173,
+    "frameH": 169,
+    "frames": 9,
+    "frameMs": 89,
+    "scale": 0.74,
+    "offset": [
+      -0.6,
+      -0.67
+    ]
+  },
+  "DARK": {
+    "file": "dark.png",
+    "frameW": 149,
+    "frameH": 64,
+    "frames": 9,
+    "frameMs": 89,
+    "scale": 1.0,
+    "offset": [
+      0.0,
+      0.0
+    ]
+  },
+  "ICE": {
+    "file": "ice.png",
+    "frameW": 63,
+    "frameH": 56,
+    "frames": 12,
+    "frameMs": 67,
+    "scale": 1.0,
+    "offset": [
+      0.0,
+      0.0
+    ]
+  },
+  "FAIRY": {
+    "file": "fairy.png",
+    "frameW": 54,
+    "frameH": 50,
+    "frames": 11,
+    "frameMs": 73,
+    "scale": 1.0,
+    "offset": [
+      0.0,
+      0.0
+    ]
+  }
+}

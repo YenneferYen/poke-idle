@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<style>
+  @font-face {
+    font-family: 'Fredoka';
+    src: url('assets/fonts/Fredoka.ttf') format('truetype');
+    font-weight: 300 700;
+    font-display: block;
+  }
+  :root {
+    --bg: #15161b;
+    --card: #1b1c22;
+    --line: #2a2b33;
+    --accent: #ee1c25;
+    --txt: #f2f2f4;
+    --txt2: #9a9ba3;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%;
+    background: transparent; overflow: hidden;
+    -webkit-user-select: none; user-select: none;
+    cursor: default;
+    font-family: 'Fredoka', system-ui, sans-serif;
+  }
+  .card {
+    position: absolute; inset: 10px;
+    background: radial-gradient(120% 90% at 50% 0%, #1e1f27 0%, var(--bg) 60%);
+    border: 1px solid var(--line);
+    border-radius: 22px;
+    box-shadow: 0 24px 70px rgba(0,0,0,.55);
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 18px; overflow: hidden;
+  }
+  /* leve brilho vermelho no topo, identidade da pokébola */
+  .card::before {
+    content: ''; position: absolute; top: -80px; left: 50%;
+    width: 260px; height: 200px; transform: translateX(-50%);
+    background: radial-gradient(closest-side, rgba(238,28,37,.22), transparent 70%);
+    pointer-events: none;
+  }
+  .ball {
+    width: 96px; height: 96px;
+    filter: drop-shadow(0 8px 18px rgba(0,0,0,.5));
+    animation: bob 2.4s ease-in-out infinite;
+  }
+  @keyframes bob {
+    0%, 100% { transform: translateY(0) rotate(-4deg); }
+    50%      { transform: translateY(-10px) rotate(4deg); }
+  }
+  .title {
+    font-size: 30px; font-weight: 600; color: var(--txt);
+    letter-spacing: .3px; margin: 0;
+  }
+  .title b { color: var(--accent); font-weight: 700; }
+  .sub { font-size: 14px; color: var(--txt2); margin: -8px 0 4px; }
+  .bar {
+    width: 200px; height: 5px; border-radius: 999px;
+    background: var(--line); overflow: hidden; position: relative;
+  }
+  .bar::after {
+    content: ''; position: absolute; top: 0; left: 0; height: 100%;
+    width: 40%; border-radius: 999px;
+    background: linear-gradient(90deg, #ff4b52, var(--accent));
+    animation: slide 1.25s cubic-bezier(.5,0,.5,1) infinite;
+  }
+  @keyframes slide {
+    0%   { left: -40%; }
+    100% { left: 100%; }
+  }
+</style>
+</head>
+<body>
+  <div class="card">
+    <img class="ball" src="assets/pokeball.png" alt="" />
+    <h1 class="title">Poke<b>Idle</b></h1>
+    <p class="sub">Carregando o mundo…</p>
+    <div class="bar"></div>
+  </div>
+</body>
+</html>

@@ -1,0 +1,5 @@
+Atualizado em: 2026-07-08T18:02:28.982Z
+
+creatures.json: 618.8 KB, 1 entradas
+items.json: 41.7 KB, 1 entradas
+moves-index.json: 3.1 KB, 18 entradas
