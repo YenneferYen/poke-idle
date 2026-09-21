@@ -151,7 +151,12 @@ function motivosParaSegurar(texto, s) {
   return motivos;
 }
 
-const hash = (texto) => crypto.createHash('sha256').update(texto).digest('hex');
+// Ignora a diferença de quebra de linha (CRLF x LF): o build do instalador roda
+// no Windows e pode gravar a cópia embutida com CRLF, enquanto o autor publica
+// com LF. Sem isso, a primeira checagem acharia "código novo" num arquivo igual
+// e mostraria uma notificação de atualização à toa.
+const hash = (texto) =>
+  crypto.createHash('sha256').update(texto.replace(/\r\n/g, '\n')).digest('hex');
 
 // Lê o texto de um arquivo, ou null se não existir.
 function lerOuNull(p) {

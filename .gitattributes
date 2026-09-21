@@ -1,0 +1,3 @@
+# Userscripts da comunidade: guardar byte a byte como o autor publica (sem
+# conversao de quebra de linha), para a copia do instalador bater com a do GitHub.
+userscripts/* -text
