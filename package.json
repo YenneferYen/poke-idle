@@ -12,7 +12,8 @@
     "start": "electron .",
     "dist": "electron-builder --win --publish never",
     "publish": "electron-builder --win --publish always",
-    "update-data": "node update-gamedata.js"
+    "update-data": "node update-gamedata.js",
+    "update-script": "node update-userscript.js"
   },
   "build": {
     "appId": "com.poke.idle",
@@ -23,10 +24,15 @@
     },
     "files": [
       "main.js",
+      "preload-userscripts.js",
+      "update-userscript.js",
       "splash.html",
       "about.html",
       "package.json",
-      "assets/**/*"
+      "assets/**/*",
+      "userscripts/**/*",
+      "!userscripts/*.anterior",
+      "!userscripts/*.tmp"
     ],
     "afterPack": "./afterPack.js",
     "win": {

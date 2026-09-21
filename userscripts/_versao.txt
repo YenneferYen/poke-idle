@@ -1,0 +1,7 @@
+PIW-QOL (Poke Idle World - Quality of Life)
+Autor: Desjunior (JulianoCLI)
+Fonte: https://github.com/JulianoCLI/PIW-QOL
+
+Versao: 10.1.1
+Baixado em: 2026-09-21T19:36:43.352Z
+Tamanho: 370273 bytes

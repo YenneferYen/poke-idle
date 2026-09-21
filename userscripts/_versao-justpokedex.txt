@@ -1,0 +1,7 @@
+JustPokédex (leitor de Pokémon, IVs, mercado e detector de shiny)
+Autor: guilherme-se
+Fonte: https://github.com/guilherme-se/justpokedex
+
+Versao: 3.0.2
+Baixado em: 2026-09-21T19:36:43.530Z
+Tamanho: 569385 bytes

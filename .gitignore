@@ -3,3 +3,5 @@ dist/
 *.log
 *.lnk
 gh_token.txt
+userscripts/*.anterior
+userscripts/*.tmp

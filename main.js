@@ -10,14 +10,65 @@ const {
   dialog,
   Notification,
   nativeImage,
+  ipcMain,
 } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { autoUpdater } = require('electron-updater');
+const { spawn } = require('child_process');
+const {
+  baixarUserscript,
+  voltarVersaoAnterior,
+  SCRIPTS: USERSCRIPTS,
+} = require('./update-userscript');
+
+// ---------------------------------------------------------------------------
+// Multi-conta (o jogo permite até 4 contas no mesmo IP).
+// Cada conta roda numa instância separada com a SUA PRÓPRIA pasta de dados, ou
+// seja: login, preferências e backups totalmente independentes — a conta 2 NÃO
+// herda o login já feito da 1. Sem o parâmetro, usa a pasta de sempre.
+//   "Poke Idle.exe" --conta=2
+// Como o "instância única" do Electron é por pasta de dados, as contas podem
+// rodar ao mesmo tempo; abrir a MESMA conta duas vezes continua bloqueado
+// (traz a janela existente para a frente).
+// IMPORTANTE: precisa vir antes de qualquer app.getPath('userData').
+// ---------------------------------------------------------------------------
+const MAX_ACCOUNTS = 4;
+const ACCOUNT = (() => {
+  const arg = process.argv.find((a) => a.startsWith('--conta='));
+  const n = arg ? parseInt(arg.split('=')[1], 10) : 1;
+  return Number.isInteger(n) && n >= 1 && n <= MAX_ACCOUNTS ? n : 1;
+})();
+if (ACCOUNT > 1) {
+  app.setPath('userData', path.join(app.getPath('appData'), 'poke-idle-conta' + ACCOUNT));
+}
+// Sufixo usado no título da janela e na bandeja, para diferenciar as contas.
+const ACCOUNT_SUFFIX = ACCOUNT > 1 ? ' — Conta ' + ACCOUNT : '';
+
+// Abre outra conta numa nova instância (nova pasta de dados = login do zero).
+function openAccount(n) {
+  const args = ['--conta=' + n];
+  try {
+    if (app.isPackaged) {
+      spawn(process.execPath, args, { detached: true, stdio: 'ignore' }).unref();
+    } else {
+      // Em desenvolvimento, o executável é o electron: passa o caminho do app.
+      spawn(process.execPath, [app.getAppPath(), ...args], { detached: true, stdio: 'ignore' }).unref();
+    }
+  } catch (e) {
+    console.warn('[Poke Idle] Falha ao abrir a conta ' + n + ':', e && e.message);
+  }
+}
 
 const GAME_URL = 'https://poke.idleworld.online/';
 const ICON_PATH = path.join(__dirname, 'assets', 'pokeball.ico');
-const PNG_ICON_PATH = path.join(__dirname, 'assets', 'pokeball.png');
+// Base do ícone da bandeja. Nas contas extras usa a pokébola com o número, para
+// dar pra diferenciar as instâncias de relance ao lado do relógio.
+const PNG_ICON_PATH = path.join(
+  __dirname,
+  'assets',
+  ACCOUNT > 1 ? 'pokeball-' + ACCOUNT + '.png' : 'pokeball.png'
+);
 const TOGGLE_HOTKEY = 'CommandOrControl+Alt+P';
 
 // Backup automático do localStorage do jogo (preferências + caças poke:hunts:*).
@@ -38,9 +89,10 @@ const LOGIN_PATH = '/login';
 // Passado pelo atalho de inicialização do Windows: abre já minimizado.
 const START_MINIMIZED = process.argv.includes('--minimized');
 
-// Agrupa a janela na barra de tarefas com ícone/nome próprios.
+// Agrupa a janela na barra de tarefas com ícone/nome próprios. Cada conta ganha
+// um id distinto para virar um grupo separado na barra de tarefas.
 if (process.platform === 'win32') {
-  app.setAppUserModelId('com.poke.idle');
+  app.setAppUserModelId('com.poke.idle' + (ACCOUNT > 1 ? '.conta' + ACCOUNT : ''));
 }
 
 // Impede que o Chromium reduza a prioridade / a taxa de frames de janelas
@@ -76,13 +128,17 @@ let connTimer = null; // poll do status de conexão do jogo
 let connDown = false; // true quando já avisamos que a conexão caiu
 let connMisses = 0; // leituras seguidas "desconectado" (evita alarme por blip)
 let chatDotMissingWarned = false; // avisa 1x se o seletor do vigia sumir (layout mudou)
+let lastCaptures = null; // último total de capturas lido do Hunt Analyzer do jogo
 let trayIconOk = null; // ícone da bandeja: conectado (pontinho verde)
 let trayIconBad = null; // ícone da bandeja: problema (pontinho vermelho)
+let trayMenu = null; // menu da bandeja (guardado para sincronizar marcadores)
 
 const CONN_POLL_MS = 20 * 1000; // frequência do vigia de conexão
 
 // Preferências lembradas entre sessões (mudo, sempre-no-topo, zoom).
-const settings = { muted: false, alwaysOnTop: false, zoom: 1 };
+// `userscripts` guarda o liga/desliga de cada script da comunidade, por id.
+// `userscriptsAuto` = baixar sozinho as versões novas desses scripts.
+const settings = { muted: false, alwaysOnTop: false, zoom: 1, userscripts: {}, userscriptsAuto: true };
 
 // ---------------------------------------------------------------------------
 // Memória da janela: lembra tamanho/posição entre sessões.
@@ -124,6 +180,9 @@ function saveWindowState() {
   state.muted = settings.muted;
   state.alwaysOnTop = settings.alwaysOnTop;
   state.zoom = settings.zoom;
+  // Um campo por script (`piwqol`, `justpokedex`), no mesmo formato de antes.
+  for (const us of USERSCRIPTS) state[us.id] = settings.userscripts[us.id];
+  state.userscriptsAuto = settings.userscriptsAuto;
   state.mini = miniMode; // lembra se estava no modo mini
   try {
     fs.writeFileSync(STATE_FILE, JSON.stringify(state));
@@ -138,6 +197,11 @@ function loadSettings() {
   settings.muted = !!s.muted;
   settings.alwaysOnTop = !!s.alwaysOnTop;
   settings.zoom = typeof s.zoom === 'number' && s.zoom > 0 ? s.zoom : 1;
+  // Nunca ligado antes (primeira vez que roda esta versão): entra ligado.
+  for (const us of USERSCRIPTS) {
+    settings.userscripts[us.id] = typeof s[us.id] === 'boolean' ? s[us.id] : true;
+  }
+  settings.userscriptsAuto = typeof s.userscriptsAuto === 'boolean' ? s.userscriptsAuto : true;
   startInMini = !!s.mini;
 }
 
@@ -175,16 +239,25 @@ function scheduleReload(delay) {
 // ou trocar de PC. Copia para arquivos datados em userData/backups, mantendo
 // só os mais recentes.
 // ---------------------------------------------------------------------------
+// Roda uma LEITURA na página num "mundo isolado": vê o mesmo DOM e o mesmo
+// localStorage do jogo, mas num JavaScript separado do dele. Assim o jogo não
+// tem como perceber a leitura (ex.: se ele trocasse o document.querySelector
+// por uma versão espiã, a nossa chamada não passaria por ela). O mundo 999 é o
+// do preload (contextIsolation); 1000 é só nosso.
+const MUNDO_LEITURA = 1000;
+function lerNaPagina(code) {
+  return mainWin.webContents.executeJavaScriptInIsolatedWorld(MUNDO_LEITURA, [{ code }]);
+}
+
 async function backupSave() {
   if (!mainWin || mainWin.isDestroyed()) return;
   try {
     const drop = JSON.stringify(SENSITIVE_KEYS);
-    const json = await mainWin.webContents.executeJavaScript(
+    const json = await lerNaPagina(
       'JSON.stringify(Object.fromEntries(Object.entries(localStorage)' +
         '.filter(([k]) => !' +
         drop +
-        '.includes(k))))',
-      true
+        '.includes(k))))'
     );
     // Nada salvo ainda (ex.: não logou) — não gera arquivo vazio.
     if (!json || json === '{}') return;
@@ -224,6 +297,37 @@ async function backupSave() {
 //   - 'full'   : o acima + cookies (desloga). Mantém hunts/preferências; você
 //                só precisa logar de novo. Útil quando o login está "bugado".
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Limpeza automática de cache.
+// O cache HTTP do jogo cresce com o tempo (medido: ~210 MB numa conta; com 4
+// contas seriam ~800 MB, já que cada uma tem pasta própria). Aqui só medimos o
+// cache HTTP e limpamos se passar do limite. É a limpeza mais leve possível:
+// NÃO mexe em cookies, localStorage, service workers, login nem hunts — no pior
+// caso o jogo só rebaixa alguns assets. Silencioso, sem recarregar a página.
+// ---------------------------------------------------------------------------
+const CACHE_LIMIT_BYTES = 250 * 1024 * 1024; // 250 MB
+const CACHE_CHECK_MS = 6 * 60 * 60 * 1000; // a cada 6h
+
+async function autoTrimCache() {
+  if (!mainWin || mainWin.isDestroyed()) return;
+  try {
+    const ses = mainWin.webContents.session;
+    const size = await ses.getCacheSize();
+    if (size > CACHE_LIMIT_BYTES) {
+      await ses.clearCache();
+      console.log(
+        '[Poke Idle] Cache automático: limpo (estava com ' +
+          (size / 1048576).toFixed(0) +
+          ' MB, limite ' +
+          (CACHE_LIMIT_BYTES / 1048576).toFixed(0) +
+          ' MB).'
+      );
+    }
+  } catch (e) {
+    console.warn('[Poke Idle] Falha na limpeza automática de cache:', e && e.message);
+  }
+}
+
 async function clearCache(mode = 'cache') {
   if (!mainWin || mainWin.isDestroyed()) return;
 
@@ -317,18 +421,36 @@ function handleNavigation(url) {
 }
 
 // ---------------------------------------------------------------------------
-// CSS injetado no modo mini: esconde a "bagunça" da HUD (barra de ícones do
-// topo, chat, painel do Auto-Helper e o botão do mercado), deixando o essencial
-// para acompanhar o idle: o time (div.phud) e os painéis de captura/batalha, que
-// aparecem por cima do mapa durante os encontros. É totalmente reversível
-// (removido ao sair do modo mini). Seletores mapeados da HUD logada em jul/2026.
+// CSS injetado no modo mini. O jogo já tem um painel de estatísticas ótimo
+// ("📊 Hunt Analyzer", div.ha-window: XP/h, $/h, derrotados, saldo), então no
+// espaço pequeno priorizamos ELE: escondemos o resto da HUD, cortamos as partes
+// longas do painel (lista de drops e rodapé) e o encostamos no canto superior
+// esquerdo. Se você fechar o painel pelo × do jogo, o mini mostra só o mapa.
+// Totalmente reversível (removido ao sair do mini). Seletores mapeados jul/2026.
 // ---------------------------------------------------------------------------
 const MINI_HIDE_CSS = [
-  'nav.game-dock',
-  'div.chat-box',
-  'div.ah-panel',
-  'button.market-cta',
-].join(',') + '{display:none !important;}';
+  // Fora do caminho no modo mini.
+  [
+    'nav.game-dock',
+    'div.chat-box',
+    'button.chat-fab', // o chat virou um botão flutuante quando recolhido
+    'div.ah-panel',
+    'button.market-cta',
+    'div.field-hud',
+    'div.phud',
+    'div.cap-panel',
+  ].join(',') + '{display:none !important;}',
+  // Enxuga o Hunt Analyzer: sem a lista de drops nem o rodapé.
+  [
+    '.ha-window .ha-drops',
+    '.ha-window .ha-drops-head',
+    '.ha-window .ha-clog-btn',
+    '.ha-window .ha-note',
+  ].join(',') + '{display:none !important;}',
+  // Encosta o painel no canto e deixa a altura acompanhar o conteúdo.
+  '.ha-window{top:6px !important;left:6px !important;right:auto !important;' +
+    'bottom:auto !important;height:auto !important;max-height:none !important;}',
+].join('\n');
 
 async function applyMiniHudCss() {
   if (!mainWin || mainWin.isDestroyed()) return;
@@ -423,20 +545,67 @@ function notifyConnection(reconnected) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Aviso de captura.
+// O jogo tem um painel próprio ("📊 Hunt Analyzer") com um contador de
+// capturados. Aqui só LEMOS esse número: quando ele sobe, avisamos — útil com o
+// app rodando escondido. O contador zera ao trocar de hunt; nesse caso apenas
+// reajustamos a referência (sem avisar).
+// ---------------------------------------------------------------------------
+function notifyCapture(delta, total) {
+  try {
+    if (!Notification.isSupported()) return;
+    const n = new Notification({
+      title: 'Poke Idle' + ACCOUNT_SUFFIX + ' — captura!',
+      body:
+        (delta === 1 ? 'Você capturou um Pokémon!' : 'Você capturou ' + delta + ' Pokémon!') +
+        ' (total da sessão: ' + total + ')',
+      icon: ICON_PATH,
+    });
+    n.on('click', showWindow);
+    n.show();
+  } catch {
+    /* notificações indisponíveis: ignora */
+  }
+}
+
+function checkCaptures(raw) {
+  // Painel fechado / fora do jogo: esquece a referência para não avisar errado.
+  if (raw === null || raw === undefined || raw === '') {
+    lastCaptures = null;
+    return;
+  }
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n)) return;
+  if (lastCaptures === null) {
+    lastCaptures = n; // primeira leitura: só serve de referência
+    return;
+  }
+  if (n > lastCaptures) notifyCapture(n - lastCaptures, n);
+  lastCaptures = n; // também cobre o reset (n < lastCaptures) ao trocar de hunt
+}
+
 async function pollConnection() {
   if (!mainWin || mainWin.isDestroyed()) return;
   let state = null;
   try {
-    state = await mainWin.webContents.executeJavaScript(
+    // Uma leitura só para as duas coisas: o pontinho de conexão e o contador de
+    // capturas do Hunt Analyzer (evita dois eval por ciclo).
+    state = await lerNaPagina(
       "(()=>{const d=document.querySelector('.chat-dot');" +
-        "return d?{on:d.classList.contains('on')}:null;})()",
-      true
+        "const c=document.querySelector('.ha-card.ha-catch b');" +
+        "return {on: d ? d.classList.contains('on') : null," +
+        " cap: c ? c.textContent.replace(/[^0-9]/g,'') : null};})()"
     );
   } catch {
     return; // página não pronta: tenta no próximo ciclo
   }
+  if (!state) return;
+
+  checkCaptures(state.cap);
+
   // Fora do jogo (login/landing não têm o pontinho): não é queda, apenas ignora.
-  if (!state) {
+  if (state.on === null) {
     connMisses = 0;
     // Se estamos no jogo (não deslogado) e mesmo assim o pontinho não existe, o
     // layout do jogo provavelmente mudou — avisa uma vez para facilitar o ajuste.
@@ -529,12 +698,364 @@ function createAboutWindow() {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Userscripts da comunidade: PIW-QOL e JustPokédex.
+//
+// São os mesmos scripts que se usam no Tampermonkey:
+//   - PIW-QOL (Desjunior/JulianoCLI): lista de hunts no lugar do mapa, lojas e
+//     depósito portáteis, analisador de hunt, filtros na Pokédex;
+//   - JustPokédex (guilherme-se): leitor de Pokémon com cálculo de IV,
+//     mercado global portátil, detector/contador de shiny, lembrete do
+//     presente diário (abre/fecha no jogo com Alt+P).
+// Os dois declaram `@grant none`, então são JavaScript comum e rodam direto —
+// quem os coloca dentro da página é o `preload-userscripts.js`. A lista (URL,
+// arquivo, ordem de injeção) fica no `update-userscript.js`.
+//
+// De onde vem cada arquivo, em ordem de preferência:
+//   1. pasta de dados do usuário — onde o "Atualizar ..." grava;
+//   2. pasta do app — a cópia que vem junto na instalação.
+// Essa ordem existe porque, no app instalado, a pasta do programa fica dentro
+// do app.asar (somente leitura): sem ela, atualizar um script exigiria
+// publicar uma versão nova do Poke Idle inteiro.
+// ---------------------------------------------------------------------------
+const USERSCRIPT_PASTA_APP = path.join(__dirname, 'userscripts');
+const USERSCRIPT_PASTA_USUARIO = path.join(app.getPath('userData'), 'userscripts');
+
+const userscriptCache = {}; // código já lido do disco, por id (evita reler a cada navegação)
+
+function userscriptSpec(id) {
+  return USERSCRIPTS.find((s) => s.id === id);
+}
+
+// Compara versões "10.1.1" x "10.2" (número a número). >0 = a é mais nova.
+function compararVersao(a, b) {
+  const pa = String(a || '0').split(/[.\-]/).map((x) => parseInt(x, 10) || 0);
+  const pb = String(b || '0').split(/[.\-]/).map((x) => parseInt(x, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) - (pb[i] || 0);
+  }
+  return 0;
+}
+
+// Caminho do arquivo que vale agora, ou null se não houver nenhum.
+// Normalmente é a cópia da pasta do usuário (a que o atualizador mantém). Mas
+// se um Poke Idle novo trouxer no instalador uma versão MAIOR do que a baixada
+// (ex.: atualização automática desligada), vale a do instalador — senão uma
+// cópia velha na pasta do usuário ganharia para sempre.
+function userscriptCaminho(id) {
+  const s = userscriptSpec(id);
+  const doUsuario = path.join(USERSCRIPT_PASTA_USUARIO, s.arquivo);
+  const doApp = path.join(USERSCRIPT_PASTA_APP, s.arquivo);
+  const temUsuario = fs.existsSync(doUsuario);
+  const temApp = fs.existsSync(doApp);
+  if (temUsuario && temApp) {
+    return compararVersao(versaoDoArquivo(doApp), versaoDoArquivo(doUsuario)) > 0 ? doApp : doUsuario;
+  }
+  return temUsuario ? doUsuario : temApp ? doApp : null;
+}
+
+// Versão declarada no cabeçalho do script (para mostrar no menu e nos avisos).
+function userscriptVersao(id) {
+  return versaoDoArquivo(userscriptCaminho(id));
+}
+
+function versaoDoArquivo(p) {
+  if (!p) return null;
+  let fd = null;
+  try {
+    // O cabeçalho está nas primeiras linhas: lê só o começo, não o arquivo todo.
+    fd = fs.openSync(p, 'r');
+    const buf = Buffer.alloc(2048);
+    const lidos = fs.readSync(fd, buf, 0, buf.length, 0);
+    const m = buf.toString('utf8', 0, lidos).match(/@version\s+([0-9][\w.\-]*)/);
+    return m ? m[1] : null;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== null) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        /* nada a fazer */
+      }
+    }
+  }
+}
+
+function userscriptCodigo(id) {
+  if (userscriptCache[id]) return userscriptCache[id];
+  const s = userscriptSpec(id);
+  const p = userscriptCaminho(id);
+  if (!p) {
+    console.warn('[Poke Idle] ' + s.nome + ' ligado, mas o arquivo não foi encontrado.');
+    return null;
+  }
+  try {
+    userscriptCache[id] = fs.readFileSync(p, 'utf8');
+    return userscriptCache[id];
+  } catch (e) {
+    console.warn('[Poke Idle] Falha ao ler o ' + s.nome + ':', e && e.message);
+    return null;
+  }
+}
+
+// O preload pede os códigos aqui, de forma síncrona, no início de cada
+// carregamento da página. Só vão os que estão ligados, na ordem da lista; se
+// todos estiverem desligados, a página carrega limpa, sem nada injetado.
+ipcMain.on('userscripts:get-codes', (e) => {
+  const entregues = [];
+  for (const s of USERSCRIPTS) {
+    if (!settings.userscripts[s.id]) {
+      console.log('[Poke Idle] ' + s.nome + ': desligado');
+      continue;
+    }
+    const code = userscriptCodigo(s.id);
+    if (!code) continue; // o aviso já saiu em userscriptCodigo()
+    console.log(
+      '[Poke Idle] ' + s.nome + ': entregue (versão ' + userscriptVersao(s.id) + ', ' +
+        (code.length / 1024).toFixed(0) + ' KB)'
+    );
+    entregues.push({ nome: s.nome, code });
+  }
+  e.returnValue = entregues;
+});
+
+// Rótulo do item de menu que volta à versão anterior (só aparece ativo se houver
+// uma guardada — o atualizador guarda a que estava em uso a cada troca).
+function userscriptTemAnterior(id) {
+  return fs.existsSync(path.join(USERSCRIPT_PASTA_USUARIO, userscriptSpec(id).arquivo + '.anterior'));
+}
+
+function userscriptRotuloVersao(id) {
+  const v = userscriptVersao(id);
+  return userscriptSpec(id).nome + (v ? ' ' + v : '');
+}
+
+// Deixa os menus coerentes com o estado real — o liga/desliga também pode vir
+// da bandeja, e a versão muda sozinha com a atualização automática.
+function sincronizarMenuUserscripts() {
+  const menu = Menu.getApplicationMenu();
+  if (menu) {
+    for (const s of USERSCRIPTS) {
+      const item = menu.getMenuItemById(s.id + '-toggle');
+      if (item) item.checked = settings.userscripts[s.id];
+      const versao = menu.getMenuItemById(s.id + '-versao');
+      if (versao) versao.label = userscriptRotuloVersao(s.id);
+      const voltar = menu.getMenuItemById(s.id + '-voltar');
+      if (voltar) voltar.enabled = userscriptTemAnterior(s.id);
+    }
+    const auto = menu.getMenuItemById('userscripts-auto');
+    if (auto) auto.checked = settings.userscriptsAuto;
+  }
+  // A bandeja tem os mesmos marcadores: precisa acompanhar. No Windows o menu
+  // da bandeja só redesenha quando é reatribuído.
+  if (tray && !tray.isDestroyed() && trayMenu) {
+    for (const s of USERSCRIPTS) {
+      const item = trayMenu.getMenuItemById(s.id + '-toggle');
+      if (item) item.checked = settings.userscripts[s.id];
+    }
+    tray.setContextMenu(trayMenu);
+  }
+}
+
+// Liga/desliga. O script só entra (ou sai) da página num carregamento novo,
+// então recarrega o jogo em seguida.
+function toggleUserscript(id) {
+  settings.userscripts[id] = !settings.userscripts[id];
+  sincronizarMenuUserscripts();
+  scheduleSave();
+  if (mainWin && !mainWin.isDestroyed()) mainWin.reload();
+}
+
+// Itens de liga/desliga de cada script, para o menu do app e o da bandeja.
+function userscriptToggleItems(comAtalho) {
+  return USERSCRIPTS.map((s) => ({
+    id: s.id + '-toggle',
+    label: s.rotulo,
+    type: 'checkbox',
+    checked: settings.userscripts[s.id],
+    ...(comAtalho && s.atalho ? { accelerator: s.atalho } : {}),
+    click: () => toggleUserscript(s.id),
+  }));
+}
+
+// Submenu "Ferramentas → Scripts da comunidade".
+function userscriptSubmenu() {
+  return [
+    ...userscriptToggleItems(true),
+    { type: 'separator' },
+    {
+      id: 'userscripts-auto',
+      label: 'Atualizar sozinho (confere a cada 6h)',
+      type: 'checkbox',
+      checked: settings.userscriptsAuto,
+      click: (item) => {
+        settings.userscriptsAuto = item.checked;
+        scheduleSave();
+        if (item.checked) autoAtualizarUserscripts();
+      },
+    },
+    { label: 'Procurar atualizações agora', click: () => atualizarUserscriptsManual() },
+    { type: 'separator' },
+    // Só informativo: mostra qual versão está valendo.
+    ...USERSCRIPTS.map((s) => ({ id: s.id + '-versao', label: userscriptRotuloVersao(s.id), enabled: false })),
+    { type: 'separator' },
+    ...USERSCRIPTS.map((s) => ({
+      id: s.id + '-voltar',
+      label: 'Voltar o ' + s.nome + ' para a versão anterior',
+      enabled: userscriptTemAnterior(s.id),
+      click: () => voltarUserscript(s.id),
+    })),
+  ];
+}
+
+function userscriptsDialog(type, message, detail, buttons) {
+  return dialog.showMessageBox({
+    type,
+    title: 'Poke Idle — scripts da comunidade',
+    message,
+    detail,
+    buttons: buttons || ['OK'],
+    noLink: true,
+    icon: ICON_PATH,
+  });
+}
+
+function notificar(title, body, onClick) {
+  try {
+    if (!Notification.isSupported()) return;
+    const n = new Notification({ title, body, icon: ICON_PATH });
+    if (onClick) n.on('click', onClick);
+    n.show();
+  } catch {
+    /* notificações indisponíveis: ignora */
+  }
+}
+
+// Confere e instala as versões novas de todos os scripts. Nunca joga erro:
+// devolve um resultado por script ({ s, r } ou { s, erro }).
+async function checarUserscripts() {
+  const resultados = [];
+  for (const s of USERSCRIPTS) {
+    try {
+      const r = await baixarUserscript(USERSCRIPT_PASTA_USUARIO, s.id, userscriptCaminho(s.id));
+      if (r.novidade && !r.segurado) delete userscriptCache[s.id]; // relê no próximo carregamento
+      resultados.push({ s, r });
+    } catch (e) {
+      resultados.push({ s, erro: (e && e.message) || 'erro desconhecido' });
+    }
+  }
+  sincronizarMenuUserscripts();
+  return resultados;
+}
+
+function recarregarJogo() {
+  showWindow();
+  if (mainWin && !mainWin.isDestroyed()) mainWin.reload();
+}
+
+// Versões seguradas já avisadas (por hash), para não repetir o aviso a cada 6h.
+const seguradosAvisados = new Set();
+let checagemAutoRodando = false;
+
+// Checagem automática: silenciosa se não houver nada (ou se estiver sem
+// internet). NÃO recarrega o jogo sozinha — isso interromperia a hunt; a
+// versão nova entra no próximo carregamento, e a notificação oferece recarregar.
+async function autoAtualizarUserscripts() {
+  if (!settings.userscriptsAuto || checagemAutoRodando) return;
+  checagemAutoRodando = true;
+  try {
+    const resultados = await checarUserscripts();
+    const instalados = resultados.filter((x) => x.r && x.r.novidade && !x.r.segurado);
+    if (instalados.length) {
+      const nomes = instalados.map((x) => x.s.nome + ' ' + x.r.versao).join(' e ');
+      console.log('[Poke Idle] Scripts atualizados: ' + nomes);
+      notificar(
+        'Poke Idle — scripts atualizados',
+        nomes + '. Entram na próxima vez que o jogo recarregar. Clique para recarregar agora.',
+        recarregarJogo
+      );
+    }
+    for (const { s, r } of resultados) {
+      if (!r || !r.segurado || seguradosAvisados.has(r.hash)) continue;
+      seguradosAvisados.add(r.hash);
+      console.warn('[Poke Idle] Atualização do ' + s.nome + ' SEGURADA: ' + r.segurado.join('; '));
+      notificar(
+        'Poke Idle — atualização do ' + s.nome + ' segurada',
+        'A versão nova mudou de um jeito suspeito e NÃO foi instalada. Você segue na versão atual. Clique para ver o motivo.',
+        () => userscriptsDialog('warning', 'Atualização do ' + s.nome + ' segurada', motivoSegurado(s, r))
+      );
+    }
+  } finally {
+    checagemAutoRodando = false;
+  }
+}
+
+function motivoSegurado(s, r) {
+  return (
+    'A versão ' + r.versao + ' publicada pelo autor ' +
+    r.segurado.join('; ') +
+    '.\n\nPode ser uma mudança legítima, mas é também o que aconteceria se a conta ' +
+    'do autor fosse invadida para roubar sessões do jogo. Por segurança ela não ' +
+    'foi instalada — você continua na versão que já estava usando.\n\n' +
+    'Peça para revisar o código novo antes de liberar (' + s.repo + ').'
+  );
+}
+
+// "Procurar atualizações agora": mesmo processo, mas sempre mostra o resultado.
+async function atualizarUserscriptsManual() {
+  const resultados = await checarUserscripts();
+  const linhas = [];
+  let algumNovo = false;
+  for (const { s, r, erro } of resultados) {
+    if (erro) linhas.push(s.nome + ': não consegui verificar (' + erro + ').');
+    else if (r.segurado) linhas.push(s.nome + ': versão nova SEGURADA.\n' + motivoSegurado(s, r));
+    else if (r.novidade) {
+      algumNovo = true;
+      linhas.push(s.nome + ': atualizado para a ' + r.versao + (r.anterior ? ' (antes: ' + r.anterior + ')' : '') + '.');
+    } else linhas.push(s.nome + ': já está na versão mais recente (' + r.versao + ').');
+  }
+  const { response } = await userscriptsDialog(
+    resultados.some((x) => x.r && x.r.segurado) ? 'warning' : 'info',
+    algumNovo ? 'Scripts atualizados' : 'Scripts da comunidade',
+    linhas.join('\n\n') + (algumNovo ? '\n\nA versão nova entra quando o jogo recarregar.' : ''),
+    algumNovo ? ['Recarregar agora', 'Depois'] : ['OK']
+  );
+  if (algumNovo && response === 0) recarregarJogo();
+}
+
+// Desfaz a última atualização de um script (se ela quebrou alguma coisa).
+async function voltarUserscript(id) {
+  const s = userscriptSpec(id);
+  try {
+    const versao = voltarVersaoAnterior(USERSCRIPT_PASTA_USUARIO, id);
+    delete userscriptCache[id];
+    // Sem isso a checagem automática reinstalaria a mesma versão em 6h.
+    if (settings.userscriptsAuto) {
+      settings.userscriptsAuto = false;
+      scheduleSave();
+    }
+    sincronizarMenuUserscripts();
+    const { response } = await userscriptsDialog(
+      'info',
+      s.nome + ' voltou para a versão ' + (versao || 'anterior'),
+      'A atualização automática foi DESLIGADA para não reinstalar a versão nova ' +
+        'sozinha. Religue em Ferramentas → Scripts da comunidade quando quiser.\n\n' +
+        'A troca entra quando o jogo recarregar.',
+      ['Recarregar agora', 'Depois']
+    );
+    if (response === 0) recarregarJogo();
+  } catch (e) {
+    userscriptsDialog('error', 'Não consegui voltar o ' + s.nome, 'Motivo: ' + ((e && e.message) || 'erro desconhecido'));
+  }
+}
+
 function createWindow() {
   const state = loadWindowState();
   const opts = {
     width: state.width || 1280,
     height: state.height || 860,
-    title: 'Poke Idle',
+    title: 'Poke Idle' + ACCOUNT_SUFFIX,
     icon: ICON_PATH,
     backgroundColor: '#1b1b2f',
     autoHideMenuBar: true,
@@ -543,6 +1064,10 @@ function createWindow() {
       // A chave de tudo: não deixa o Chromium desacelerar os timers da página
       // quando a janela está minimizada / atrás de outras janelas.
       backgroundThrottling: false,
+      // Coloca os userscripts (PIW-QOL, JustPokédex) na página antes dos scripts do jogo. O preload só usa
+      // o `ipcRenderer`, então o isolamento de contexto e o sandbox continuam
+      // nos padrões seguros do Electron.
+      preload: path.join(__dirname, 'preload-userscripts.js'),
     },
   };
   if (boundsOnScreen(state)) {
@@ -709,11 +1234,13 @@ function updateTrayStatus() {
   const problem = loggedOut || connDown;
   if (trayIconOk && trayIconBad) tray.setImage(problem ? trayIconBad : trayIconOk);
   tray.setToolTip(
-    loggedOut
-      ? 'Poke Idle — DESCONECTADO (faça login)'
-      : connDown
-        ? 'Poke Idle — conexão caiu (reconectando…)'
-        : 'Poke Idle — o jogo continua rodando em segundo plano'
+    'Poke Idle' +
+      ACCOUNT_SUFFIX +
+      (loggedOut
+        ? ' — DESCONECTADO (faça login)'
+        : connDown
+          ? ' — conexão caiu (reconectando…)'
+          : ' — o jogo continua rodando em segundo plano')
   );
 }
 
@@ -722,10 +1249,11 @@ function createTray() {
   trayIconOk = makeTrayIcon([40, 180, 40]); // verde (BGR)
   trayIconBad = makeTrayIcon([40, 40, 220]); // vermelho (BGR)
   tray = new Tray(trayIconOk);
-  tray.setToolTip('Poke Idle — o jogo continua rodando em segundo plano');
-  const trayMenu = Menu.buildFromTemplate([
+  tray.setToolTip('Poke Idle' + ACCOUNT_SUFFIX + ' — o jogo continua rodando em segundo plano');
+  trayMenu = Menu.buildFromTemplate([
     { label: 'Mostrar / Esconder', click: toggleWindow },
     { label: 'Modo mini (canto da tela)', click: toggleMiniMode },
+    ...userscriptToggleItems(false),
     { label: 'Recarregar jogo', click: () => mainWin && mainWin.reload() },
     { label: 'Limpar cache e recarregar', click: () => clearCache('cache') },
     {
@@ -887,7 +1415,11 @@ app.whenReady().then(() => {
           type: 'checkbox',
           checked: app.getLoginItemSettings().openAtLogin,
           click: (mi) =>
-            app.setLoginItemSettings({ openAtLogin: mi.checked, args: ['--minimized'] }),
+            app.setLoginItemSettings({
+              openAtLogin: mi.checked,
+              // Mantém a conta ao iniciar com o Windows (a conta 2 volta como conta 2).
+              args: ACCOUNT > 1 ? ['--minimized', '--conta=' + ACCOUNT] : ['--minimized'],
+            }),
         },
         {
           label: 'Esconder na bandeja',
@@ -905,12 +1437,34 @@ app.whenReady().then(() => {
       ],
     },
     {
+      // O jogo permite até 4 contas no mesmo IP. Cada uma abre numa instância
+      // separada, com pasta de dados própria (login independente, do zero).
+      label: 'Contas',
+      submenu: [
+        ...Array.from({ length: MAX_ACCOUNTS }, (_, i) => i + 1).map((n) => ({
+          label:
+            (n === 1 ? 'Conta principal' : 'Conta ' + n) +
+            (n === ACCOUNT ? '  (esta janela)' : ''),
+          enabled: n !== ACCOUNT,
+          click: () => openAccount(n),
+        })),
+        { type: 'separator' },
+        {
+          label: 'Cada conta tem login e dados próprios',
+          enabled: false,
+        },
+      ],
+    },
+    {
       label: 'Ferramentas',
       submenu: [
         {
           label: 'Verificar atualizações',
           click: () => runUpdateCheck(true),
         },
+        { type: 'separator' },
+        // Melhorias do jogo feitas pela comunidade (userscripts).
+        { label: 'Scripts da comunidade', submenu: userscriptSubmenu() },
         { type: 'separator' },
         {
           label: 'Ferramentas de desenvolvedor',
@@ -956,11 +1510,23 @@ app.whenReady().then(() => {
   // Vigia da conexão do jogo (avisa se o websocket cair).
   connTimer = setInterval(pollConnection, CONN_POLL_MS);
 
+  // Limpeza automática de cache: confere um pouco depois de abrir e a cada 6h.
+  setTimeout(autoTrimCache, 60 * 1000);
+  setInterval(autoTrimCache, CACHE_CHECK_MS);
+
+  // Scripts da comunidade: confere versões novas 1 min depois de abrir (dá
+  // tempo do jogo carregar) e depois a cada 6h. Vale também rodando pelo
+  // código, e em cada conta: cada uma tem a sua pasta de dados.
+  setTimeout(() => autoAtualizarUserscripts(), 60 * 1000);
+  setInterval(() => autoAtualizarUserscripts(), 6 * 60 * 60 * 1000);
+
   // Auto-atualização (só quando instalado). Verifica ao abrir e a cada 6h;
   // baixa em segundo plano e avisa quando estiver pronta para instalar. A
   // verificação automática é silenciosa (não incomoda se não houver update ou
   // se estiver offline); só a verificação manual mostra "já está atualizado".
-  if (app.isPackaged) {
+  // Só a conta principal cuida do update: as contas extras compartilham a mesma
+  // instalação, então 4 instâncias baixando o mesmo instalador seria desperdício.
+  if (app.isPackaged && ACCOUNT === 1) {
     runUpdateCheck(false);
     setInterval(() => runUpdateCheck(false), 6 * 60 * 60 * 1000);
   }
